@@ -1,0 +1,174 @@
+/* 基础样式重置 */
+/* CSS变量定义 */
+:root {
+  /* 颜色变量 */
+  --primary-color: #3b82f6;
+  --primary-dark: #2563eb;
+  --primary-light: #60a5fa;
+  --secondary-color: #f3f4f6;
+  --text-primary: #333;
+  --text-secondary: #4b5563;
+  --border-color: #d1d5db;
+  --background-light: #f9fafb;
+  --background-white: #ffffff;
+  --error-color: #ef4444;
+  --error-background: #fee2e2;
+  --success-color: #10b981;
+  --success-background: #d1fae5;
+  
+  /* 尺寸变量 */
+  --border-radius: 6px;
+  --border-radius-lg: 12px;
+  --spacing-xs: 0.5rem;
+  --spacing-sm: 0.75rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --font-size-sm: 0.9rem;
+  --font-size-md: 0.95rem;
+  --font-size-lg: 1.2rem;
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  
+  /* 过渡动画 */
+  --transition-fast: 0.2s ease;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* 容器样式 */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* 主内容区样式 */
+.main-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+}
+
+/* 地图容器和路线面板样式 */
+.map-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 500px;
+}
+
+.route-panel {
+  width: 340px;
+  background-color: var(--background-white);
+  overflow-y: auto;
+  box-shadow: -5px 0 15px rgba(0, 0, 0, 0.05);
+  z-index: 10;
+  border-radius: var(--border-radius-lg) 0 0 var(--border-radius-lg);
+  padding: var(--spacing-md);
+}
+
+/* 表单元素样式 */
+.form-input {
+  flex: 1;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: var(--font-size-md);
+  transition: all var(--transition-normal);
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  transition: all var(--transition-fast);
+}
+
+/* 按钮样式 */
+.control-button {
+  flex: 1;
+  padding: var(--spacing-sm);
+  border: none;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  transition: all var(--transition-normal);
+  font-weight: 500;
+}
+
+.control-button:hover {
+  transition: all var(--transition-fast);
+}
+
+.control-button.primary {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  color: white;
+  box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.3);
+}
+
+.control-button.primary:hover {
+  background: linear-gradient(135deg, var(--primary-dark), #1d4ed8);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 8px -1px rgba(59, 130, 246, 0.4);
+}
+
+.control-button.primary:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px -1px rgba(59, 130, 246, 0.3);
+}
+
+.control-button.secondary {
+  background-color: var(--secondary-color);
+  color: var(--text-secondary);
+  border: 1px solid #e5e7eb;
+}
+
+.control-button.secondary:hover {
+  background-color: #e5e7eb;
+  transform: translateY(-2px);
+}
+
+.control-button.secondary:active {
+  transform: translateY(0);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .main-content {
+    flex-direction: column;
+  }
+
+  .map-container {
+    height: 60%;
+  }
+
+  .route-panel {
+    width: 100%;
+    height: 40%;
+    box-shadow: 0 -5px 15px rgba(0, 0, 0, 0.05);
+    border-radius: var(--border-radius-lg) var(--border-radius-lg) 0 0;
+  }
+}

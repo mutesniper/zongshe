@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>货车调度优化与仿真系统</title>
+    <!-- 引入Font Awesome图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <!-- 配置安全密钥 -->
+    <script type="text/javascript">
+      window._AMapSecurityConfig = {
+        securityJsCode: '5831131d7a93734bf7539e53e39ffca2', // 用户提供的安全密钥
+      }
+    </script>
+    <!-- 异步引入JS API Loader -->
+    <script async src="https://webapi.amap.com/loader.js"></script>
+    <script type="text/javascript">
+      // 初始化地图加载
+      window.initMapLoader = function () {
+        return AMapLoader.load({
+          key: '14651636c0d5d26fdeafdea631f42119', // 已配置的应用key
+          version: '2.0', // 指定加载的JS API版本
+          // 仅加载核心插件，其他插件按需加载
+          plugins: ['AMap.ToolBar', 'AMap.Scale', 'AMap.MapType'], 
+          // 添加配置项以提高加载性能
+          AMapUI: {
+            version: '1.1',
+            plugins: []
+          }
+        })
+      }
+    </script>
+    <!-- 引入UI组件库 -->
+    <link rel="stylesheet" href="https://cache.amap.com/lbs/static/main1119.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
