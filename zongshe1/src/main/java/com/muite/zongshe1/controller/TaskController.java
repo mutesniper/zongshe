@@ -3,6 +3,7 @@ package com.muite.zongshe1.controller;
 
 import com.muite.zongshe1.entity.Task;
 import com.muite.zongshe1.mapper.TaskMapper;
+import com.muite.zongshe1.service.TaskService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,10 +15,10 @@ import java.util.List;
 @CrossOrigin(origins = "*")
 public class TaskController {
     @Autowired
-    TaskMapper taskMapper;
+    TaskService taskService;
     @GetMapping("/task")
     public List<Task> selectAll() {
-        return taskMapper.selectAll();
+        return taskService.selectAll();
     }
 
 }

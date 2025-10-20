@@ -2,6 +2,7 @@ package com.muite.zongshe1.controller;
 
 import com.muite.zongshe1.entity.Point;
 import com.muite.zongshe1.mapper.PointMapper;
+import com.muite.zongshe1.service.PointService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,17 +15,17 @@ import java.util.List;
 @CrossOrigin(origins = "*")
 public class PointController {
     @Autowired
-    PointMapper pointMapper;
+    PointService pointService;
 
     @GetMapping("/point/{name}")
     public List<Point> select(@PathVariable String name) {
-        List<Point> location= pointMapper.selectByName(name);
+        List<Point> location= pointService.selectByName(name);
         return location;
     }
 
     @GetMapping("/point")
     public List<Point> selectAll(){
-        List<Point> locations=pointMapper.selectAll();
+        List<Point> locations=pointService.selectAll();
         return locations;
     }
 
