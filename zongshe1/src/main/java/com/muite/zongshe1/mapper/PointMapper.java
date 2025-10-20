@@ -4,6 +4,8 @@ package com.muite.zongshe1.mapper;
 import com.muite.zongshe1.entity.Point;
 import org.apache.ibatis.annotations.Mapper;
 
+import java.util.List;
+
 /**
 * @author 14693
 * @description 针对表【point】的数据库操作Mapper
@@ -24,6 +26,7 @@ public interface PointMapper {
     int updateByPrimaryKeySelective(Point record);
 
     int updateByPrimaryKey(Point record);
-    String selectByName(String name);
+    List<Point> selectByName(String name);
+    List<Point> selectAll();
 
 }

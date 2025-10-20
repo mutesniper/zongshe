@@ -5,13 +5,13 @@
 <mapper namespace="com.muite.zongshe1.mapper.PointMapper">
 
     <resultMap id="BaseResultMap" type="com.muite.zongshe1.entity.Point">
-            <result property="dest" column="dest" />
+            <result property="location" column="location" />
             <result property="name" column="name" />
             <result property="type" column="type" />
     </resultMap>
 
     <sql id="Base_Column_List">
-        dest,name,type
+        location,name,type
     </sql>
 
     <select id="selectByPrimaryKey" parameterType="java.lang.Long" resultMap="BaseResultMap">
@@ -20,9 +20,18 @@
         from point
         where 
     </select>
-    <select id="selectByName" resultType="java.lang.String">
-        select dest from point where name=#{name}
+
+    <select id="selectByName" resultType="com.muite.zongshe1.entity.Point">
+        select name,location,type from poi where name=#{name}
     </select>
+
+    <select id="selectAll" resultType="com.muite.zongshe1.entity.Point">
+        SELECT name, location, type
+        FROM poi
+    </select>
+
+
+
 
     <delete id="deleteByPrimaryKey" parameterType="java.lang.Long">
         delete from point
@@ -30,18 +39,18 @@
     </delete>
     <insert id="insert">
         insert into point
-        ( dest,name,type)
-        values (#{dest},#{name},#{type})
+        ( location,name,type)
+        values (#{location},#{name},#{type})
     </insert>
     <insert id="insertSelective">
         insert into point
         <trim prefix="(" suffix=")" suffixOverrides=",">
-                <if test="dest != null">dest,</if>
+                <if test="location != null">location,</if>
                 <if test="name != null">name,</if>
                 <if test="type != null">type,</if>
         </trim>
         <trim prefix="values (" suffix=")" suffixOverrides=",">
-                <if test="dest != null">#{dest},</if>
+                <if test="location != null">#{location},</if>
                 <if test="name != null">#{name},</if>
                 <if test="type != null">#{type},</if>
         </trim>
@@ -49,8 +58,8 @@
     <update id="updateByPrimaryKeySelective" parameterType="com.muite.zongshe1.entity.Point">
         update point
         <set>
-                <if test="dest != null">
-                    dest = #{dest},
+                <if test="location != null">
+                    location = #{location},
                 </if>
                 <if test="name != null">
                     name = #{name},
@@ -63,8 +72,8 @@
     </update>
     <update id="updateByPrimaryKey" parameterType="com.muite.zongshe1.entity.Point">
         update point
-        set 
-            dest =  #{dest},
+        set
+            location =  #{location},
             name =  #{name},
             type =  #{type}
         where  

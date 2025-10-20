@@ -10,7 +10,7 @@ public class Point {
     /**
      * 
      */
-    private String dest;
+    private String location;
 
     /**
      * 
@@ -25,8 +25,8 @@ public class Point {
     public Point() {
     }
 
-    public Point(String dest, String name, String type) {
-        this.dest = dest;
+    public Point(String name,String location, String type) {
+        this.location = location;
         this.name = name;
         this.type = type;
     }
@@ -44,7 +44,7 @@ public class Point {
             return false;
         }
         Point other = (Point) that;
-        return (this.getDest() == null ? other.getDest() == null : this.getDest().equals(other.getDest()))
+        return (this.getLocation() == null ? other.getLocation() == null : this.getLocation().equals(other.getLocation()))
             && (this.getName() == null ? other.getName() == null : this.getName().equals(other.getName()))
             && (this.getType() == null ? other.getType() == null : this.getType().equals(other.getType()));
     }
@@ -53,7 +53,7 @@ public class Point {
     public int hashCode() {
         final int prime = 31;
         int result = 1;
-        result = prime * result + ((getDest() == null) ? 0 : getDest().hashCode());
+        result = prime * result + ((getLocation() == null) ? 0 : getLocation().hashCode());
         result = prime * result + ((getName() == null) ? 0 : getName().hashCode());
         result = prime * result + ((getType() == null) ? 0 : getType().hashCode());
         return result;
@@ -65,27 +65,21 @@ public class Point {
         sb.append(getClass().getSimpleName());
         sb.append(" [");
         sb.append("Hash = ").append(hashCode());
-        sb.append(", dest=").append(dest);
+        sb.append(", location=").append(location);
         sb.append(", name=").append(name);
         sb.append(", type=").append(type);
         sb.append("]");
         return sb.toString();
     }
 
-    /**
-     * 获取
-     * @return dest
-     */
-    public String getDest() {
-        return dest;
+
+    public String getLocation() {
+        return location;
     }
 
-    /**
-     * 设置
-     * @param dest
-     */
-    public void setDest(String dest) {
-        this.dest = dest;
+
+    public void setLocation(String location) {
+        this.location = location;
     }
 
     /**

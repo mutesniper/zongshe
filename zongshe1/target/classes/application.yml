@@ -1,0 +1,23 @@
+# application.yml
+
+amap:
+  key: "dc498633b662571e956a5d8ab59bceea"  # ← 替换为你自己的 Key
+
+poi:
+  crawler:
+    auto-run: false        # 是否启动时自动爬取
+    keywords: "仓库"
+    city: "北京"
+    max-pages: 5
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/zongshe
+    username: root
+    password: abc123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  application:
+    name: zongshe1
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml

@@ -13,8 +13,8 @@ class Zongshe1ApplicationTests {
 
     @Test
     void contextLoads() {
-        String dest = pointMapper.selectByName("阜通西");
-        System.out.println(dest);
+        String location = pointMapper.selectByName("阜通西").toString();
+        System.out.println(location);
     }
 
 }
