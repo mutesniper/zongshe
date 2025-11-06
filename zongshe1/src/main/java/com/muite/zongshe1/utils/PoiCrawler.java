@@ -3,6 +3,8 @@ package com.muite.zongshe1.utils;
 import com.muite.zongshe1.entity.Point;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -10,11 +12,14 @@ import org.springframework.web.client.RestTemplate;
 
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
 public class PoiCrawler {
+
+    private static final Logger log = LoggerFactory.getLogger(PoiCrawler.class);
 
     @Value("${amap.key}")
     private String amapKey;
@@ -44,7 +49,7 @@ public class PoiCrawler {
     @PostConstruct
     public void init() {
         if (autoRun) {
-            System.out.println(" 启动时自动爬取 POI 数据...");
+            log.info(" 启动时自动爬取 POI 数据...");
             getData();
         }
     }
@@ -63,15 +68,15 @@ public class PoiCrawler {
                 List<Point> pois = parsePoiResponse(response);
                 if (pois.isEmpty()) break;
                 allPois.addAll(pois);
-                System.out.println(" 第 " + page + " 页，获取 " + pois.size() + " 条 POI");
+                log.info(" 第 " + page + " 页，获取 " + pois.size() + " 条 POI");
 
                 Thread.sleep(1000); // 避免触发 API 限流
             }
-            System.out.println(allPois);
+            //System.out.println(allPois);
             saveToDatabase(allPois);
 
         } catch (Exception e) {
-            System.err.println("爬取失败: " + e.getMessage());
+            log.error("爬取失败: {}", e.getMessage(), e);
             e.printStackTrace();
         }
     }
@@ -100,7 +105,12 @@ public class PoiCrawler {
     }
 
     private void saveToDatabase(List<Point> pois) {
-        // 过滤有效数据
+        if (pois.isEmpty()) {
+            System.out.println(" 无POI数据可保存");
+            return;
+        }
+
+        // 1. 先过滤无效数据（原逻辑保留）
         List<Point> validPois = pois.stream()
                 .filter(poi -> {
                     String loc = poi.getLocation();
@@ -110,24 +120,58 @@ public class PoiCrawler {
                 })
                 .collect(Collectors.toList());
 
-        // 关键：只有 validPois 非空才执行插入
         if (validPois.isEmpty()) {
-            System.out.println(" 无有效 POI 数据可保存");
-            return; // ← 直接退出，不执行后续插入！
+            System.out.println(" 无有效POI数据可保存");
+            return;
         }
 
-        // 执行插入
-        String sql = "INSERT INTO poi (name, location, type) VALUES (?, ?, ?)";
-        jdbcTemplate.batchUpdate(sql, validPois, validPois.size(), (ps, poi) -> {
-            String[] coords = poi.getLocation().split(",");
-            String wkt = String.format("POINT(%s %s)", coords[0], coords[1]);
+
+        // 2. 动态生成去重SQL（关键修复：根据POI数量生成占位符）
+        List<String> nameList = validPois.stream().map(Point::getName).collect(Collectors.toList());
+        List<String> locationList = validPois.stream().map(Point::getLocation).collect(Collectors.toList());
+
+        // 生成占位符（如nameList有3条数据，生成 "?, ?, ?"）
+        String namePlaceholders = String.join(", ", Collections.nCopies(nameList.size(), "?"));
+        String locationPlaceholders = String.join(", ", Collections.nCopies(locationList.size(), "?"));
+
+        // 3. 查数据库中已存在的POI（动态占位符，避免参数不匹配）
+        String sql = String.format(
+                "SELECT CONCAT(name, '_', location) FROM poi WHERE name IN (%s) AND location IN (%s)",
+                namePlaceholders, locationPlaceholders
+        );
+
+        // 合并参数（nameList在前，locationList在后，与占位符顺序一致）
+        List<Object> params = new ArrayList<>();
+        params.addAll(nameList);
+        params.addAll(locationList);
+
+        List<String> existingKeys = jdbcTemplate.queryForList(
+                sql,
+                String.class,
+                params.toArray() // 动态传入参数，数量与占位符一致
+        );
+
+
+        // 4. 过滤掉已存在的POI
+        List<Point> newPois = validPois.stream()
+                .filter(poi -> !existingKeys.contains(poi.getName() + "_" + poi.getLocation()))
+                .collect(Collectors.toList());
+
+        if (newPois.isEmpty()) {
+            log.info(" 所有POI数据已存在，无需重复保存");
+            return;
+        }
+
+
+        // 5. 批量插入新数据
+        String insertSql = "INSERT INTO poi (name, location, type) VALUES (?, ?, ?)";
+        jdbcTemplate.batchUpdate(insertSql, newPois, newPois.size(), (ps, poi) -> {
             ps.setString(1, poi.getName());
             ps.setString(2, poi.getLocation());
             ps.setString(3, poi.getType());
         });
 
-        // 只打印 validPois 的数量
-        System.out.println(" 共保存 " + validPois.size() + " 条 POI 到 MySQL");
+        log.info("新增保存 {} 条POI到MySQL", newPois.size());
     }
 
     private boolean isNumeric(String str) {
@@ -139,4 +183,35 @@ public class PoiCrawler {
             return false;
         }
     }
+
+    // 新增：带动态参数的爬取方法（供Controller调用）
+    public void getData(String dynamicCity, String dynamicKeyword, Integer dynamicMaxPages) {
+        // 1. 保存原始配置参数（用于后续恢复，避免影响自动爬取）
+        String originalCity = this.city;
+        String originalKeyword = this.keywords;
+        int originalMaxPages = this.maxPages;
+
+        try {
+            // 2. 用动态参数覆盖当前实例的参数（若传入null则使用默认配置）
+            if (dynamicCity != null && !dynamicCity.trim().isEmpty()) {
+                this.city = dynamicCity.trim();
+            }
+            if (dynamicKeyword != null && !dynamicKeyword.trim().isEmpty()) {
+                this.keywords = dynamicKeyword.trim();
+            }
+            if (dynamicMaxPages != null && dynamicMaxPages > 0) {
+                this.maxPages = dynamicMaxPages;
+            }
+
+            // 3. 调用原有爬取逻辑（此时使用的是动态参数）
+            getData();
+
+        } finally {
+            // 4. 无论成功失败，恢复原始参数（关键！避免影响后续自动爬取或其他调用）
+            this.city = originalCity;
+            this.keywords = originalKeyword;
+            this.maxPages = originalMaxPages;
+        }
+    }
+
 }

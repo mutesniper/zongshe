@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface TaskService {
     List<Task> selectAll();
+
+    void insert(Task task);
 }

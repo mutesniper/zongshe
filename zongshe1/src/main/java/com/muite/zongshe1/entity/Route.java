@@ -6,17 +6,18 @@ public class Route {
     private Integer id;
     private String start;
     private String destination;
-    private BigDecimal time_cost;
+    private BigDecimal timeCost;
     private String passable;
+
 
     public Route() {
     }
 
-    public Route(Integer id, String start, String destination, BigDecimal time_cost, String passable) {
+    public Route(Integer id, String start, String destination, BigDecimal timeCost, String passable) {
         this.id = id;
         this.start = start;
         this.destination = destination;
-        this.time_cost = time_cost;
+        this.timeCost = timeCost;
         this.passable = passable;
     }
 
@@ -70,18 +71,18 @@ public class Route {
 
     /**
      * 获取
-     * @return time_cost
+     * @return timeCost
      */
-    public BigDecimal getTime_cost() {
-        return time_cost;
+    public BigDecimal getTimeCost() {
+        return timeCost;
     }
 
     /**
      * 设置
-     * @param time_cost
+     * @param timeCost
      */
-    public void setTime_cost(BigDecimal time_cost) {
-        this.time_cost = time_cost;
+    public void setTimeCost(BigDecimal timeCost) {
+        this.timeCost = timeCost;
     }
 
     /**
@@ -101,6 +102,6 @@ public class Route {
     }
 
     public String toString() {
-        return "Route{id = " + id + ", start = " + start + ", destination = " + destination + ", time_cost = " + time_cost + ", passable = " + passable + "}";
+        return "Route{id = " + id + ", start = " + start + ", destination = " + destination + ", timeCost = " + timeCost + ", passable = " + passable + "}";
     }
 }

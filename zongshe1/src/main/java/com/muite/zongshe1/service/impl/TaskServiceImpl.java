@@ -16,4 +16,9 @@ public class TaskServiceImpl implements TaskService {
     public List<Task> selectAll() {
         return taskMapper.selectAll();
     }
+
+    @Override
+    public void insert(Task task) {
+        taskMapper.insert(task);
+    }
 }

@@ -3,6 +3,7 @@ package com.muite.zongshe1.mapper;
 
 import com.muite.zongshe1.entity.Truck;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 
@@ -29,4 +30,6 @@ public interface TruckMapper {
 
     List<Truck> selectAll();
 
+    @Select("select * from truck where status=#{status}")
+    List<Truck> selectByStatus(String status);
 }

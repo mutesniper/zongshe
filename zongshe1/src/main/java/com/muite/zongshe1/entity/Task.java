@@ -1,24 +1,32 @@
 package com.muite.zongshe1.entity;
 
 
+import java.math.BigDecimal;
 
 public class Task {
     private Integer id;
     private String start;
     private String destination;
-    private Object goods_type;
-    private Integer truck_id;
+    private Object goodsType;
+    private Integer truckId;
+    private Object status;
+
+    private BigDecimal weight;
+    private BigDecimal volume;
 
 
     public Task() {
     }
 
-    public Task(Integer id, String start, String destination, Object goods_type, Integer truck_id) {
+    public Task(Integer id, String start, String destination, Object goodsType, Integer truckId, Object status, BigDecimal weight, BigDecimal volume) {
         this.id = id;
         this.start = start;
         this.destination = destination;
-        this.goods_type = goods_type;
-        this.truck_id = truck_id;
+        this.goodsType = goodsType;
+        this.truckId = truckId;
+        this.status = status;
+        this.weight = weight;
+        this.volume = volume;
     }
 
     /**
@@ -71,37 +79,85 @@ public class Task {
 
     /**
      * 获取
-     * @return goods_type
+     * @return goodsType
      */
-    public Object getGoods_type() {
-        return goods_type;
+    public Object getGoodsType() {
+        return goodsType;
     }
 
     /**
      * 设置
-     * @param goods_type
+     * @param goodsType
      */
-    public void setGoods_type(Object goods_type) {
-        this.goods_type = goods_type;
+    public void setGoodsType(Object goodsType) {
+        this.goodsType = goodsType;
     }
 
     /**
      * 获取
-     * @return truck_id
+     * @return truckId
      */
-    public Integer getTruck_id() {
-        return truck_id;
+    public Integer getTruckId() {
+        return truckId;
     }
 
     /**
      * 设置
-     * @param truck_id
+     * @param truckId
      */
-    public void setTruck_id(Integer truck_id) {
-        this.truck_id = truck_id;
+    public void setTruckId(Integer truckId) {
+        this.truckId = truckId;
+    }
+
+    /**
+     * 获取
+     * @return status
+     */
+    public Object getStatus() {
+        return status;
+    }
+
+    /**
+     * 设置
+     * @param status
+     */
+    public void setStatus(Object status) {
+        this.status = status;
+    }
+
+    /**
+     * 获取
+     * @return weight
+     */
+    public BigDecimal getWeight() {
+        return weight;
+    }
+
+    /**
+     * 设置
+     * @param weight
+     */
+    public void setWeight(BigDecimal weight) {
+        this.weight = weight;
+    }
+
+    /**
+     * 获取
+     * @return volume
+     */
+    public BigDecimal getVolume() {
+        return volume;
+    }
+
+    /**
+     * 设置
+     * @param volume
+     */
+    public void setVolume(BigDecimal volume) {
+        this.volume = volume;
     }
 
     public String toString() {
-        return "Task{id = " + id + ", start = " + start + ", destination = " + destination + ", goods_type = " + goods_type + ", truck_id = " + truck_id + "}";
+        return "Task{id = " + id + ", start = " + start + ", destination = " + destination + ", goodsType = " + goodsType + ", truckId = " + truckId + ", status = " + status + ", weight = " + weight + ", volume = " + volume + "}";
     }
 }

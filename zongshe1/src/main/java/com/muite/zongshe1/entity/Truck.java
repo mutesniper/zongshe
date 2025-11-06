@@ -38,6 +38,8 @@ public class Truck {
      */
     private String location;
 
+    private transient double distanceToTask; // 临时距离（不存入数据库）
+
     public Truck() {
     }
 
@@ -97,6 +99,13 @@ public class Truck {
         sb.append(", location=").append(location);
         sb.append("]");
         return sb.toString();
+    }
+
+    public Double getDistanceToTask() {
+        return distanceToTask;
+    }
+    public void setDistanceToTask(Double distanceToTask) {
+        this.distanceToTask = distanceToTask;
     }
 
     /**
