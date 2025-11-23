@@ -44,6 +44,14 @@ public interface TaskMapper {
      * 查询所有未分配车辆的任务（truck_id 为 null）
      * @return 未分配任务列表
      */
-    @Select("SELECT * FROM task WHERE truck_id IS NULL")
+    @Select("SELECT * FROM task WHERE truck_id =-1")
     List<Task> findByTruckIdIsNull();
+
+    /**
+     * 更新任务的status
+     * @param task
+     */
+    void updateStatus(Task task);
+
+
 }

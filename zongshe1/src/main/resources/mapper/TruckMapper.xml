@@ -73,6 +73,9 @@
                 <if test="location != null">
                     location = #{location},
                 </if>
+                <if test="currentPointSequence != null">
+                    current_point_sequence = #{currentPointSequence},
+                </if>
         </set>
         where   id = #{id} 
     </update>
@@ -83,7 +86,8 @@
             max_vol =  #{maxVol},
             status =  #{status},
             type =  #{type},
-            location =  #{location}
+            location =  #{location},
+            current_point_sequence = #{currentPointSequence}
         where   id = #{id} 
     </update>
 </mapper>

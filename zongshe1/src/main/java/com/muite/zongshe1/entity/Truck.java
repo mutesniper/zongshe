@@ -38,7 +38,23 @@ public class Truck {
      */
     private String location;
 
+
+    private BigDecimal length;
+    private BigDecimal weight;
+
     private transient double distanceToTask; // 临时距离（不存入数据库）
+
+    // 新增字段：当前行驶到的路径点顺序（从1开始）
+    private Integer currentPointSequence;
+
+    // 新增getter和setter
+    public Integer getCurrentPointSequence() {
+        return currentPointSequence;
+    }
+
+    public void setCurrentPointSequence(Integer currentPointSequence) {
+        this.currentPointSequence = currentPointSequence;
+    }
 
     public Truck() {
     }
@@ -70,6 +86,7 @@ public class Truck {
             && (this.getStatus() == null ? other.getStatus() == null : this.getStatus().equals(other.getStatus()))
             && (this.getType() == null ? other.getType() == null : this.getType().equals(other.getType()))
             && (this.getLocation() == null ? other.getLocation() == null : this.getLocation().equals(other.getLocation()));
+
     }
 
     @Override
@@ -203,4 +220,7 @@ public class Truck {
     public void setLocation(String location) {
         this.location = location;
     }
+
+
+
 }

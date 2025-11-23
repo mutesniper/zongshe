@@ -1,5 +1,7 @@
 package com.muite.zongshe1.utils;
 
+import com.muite.zongshe1.constant.GoodsTypeConstant;
+import com.muite.zongshe1.constant.PoiTypeConstant;
 import com.muite.zongshe1.entity.Point;
 import com.muite.zongshe1.entity.Task;
 import com.muite.zongshe1.mapper.PointMapper;
@@ -25,7 +27,13 @@ public class TaskGenerator {
 
     // 候选货物类型（可根据你的车辆分类调整）
     private static final List<String> GOODS_TYPES = List.of(
-            "危险品","普通货物","需通风货物","易腐货物","液体粉末","散装重物","大宗货物"
+            GoodsTypeConstant.DANGEROUS_GOODS,
+            GoodsTypeConstant.GENERAL_GOODS,
+            GoodsTypeConstant.GOODS_REQUIREING_VENTILATION,
+            GoodsTypeConstant.PERISHABLE_GOODS,
+            GoodsTypeConstant.LIQUID_POWDERS,
+            GoodsTypeConstant.BULK_HEAVY_GOODS,
+            GoodsTypeConstant.BULK_GOODS
     );
 
     private final PointMapper pointMapper;
@@ -55,11 +63,11 @@ public class TaskGenerator {
 
             // 筛选起点（仓库类型）
             List<Point> startCandidates = poiList.stream()
-                    .filter(poi -> "仓库".equals(poi.getType()))
+                    .filter(poi -> PoiTypeConstant.WAREHOUSE.equals(poi.getType()))
                     .collect(Collectors.toList());
             // 筛选终点（商场类型）
             List<Point> endCandidates = poiList.stream()
-                    .filter(poi -> "商场".equals(poi.getType()))
+                    .filter(poi -> PoiTypeConstant.SHOPPING_MALL.equals(poi.getType()))
                     .collect(Collectors.toList());
             
             Point startPoi = startCandidates.get(random.nextInt(startCandidates.size()));
@@ -74,37 +82,37 @@ public class TaskGenerator {
             double weightDouble;
             double volumeDouble;
             switch (goodsType) {
-                case "危险品":
+                case GoodsTypeConstant.DANGEROUS_GOODS:
                     // 危险品通常单次运输量较小，且重量/体积适中
                     weightDouble = random.nextDouble() * 3 + 0.1; // 0.1-3.1吨
                     volumeDouble = random.nextDouble() * 5 + 0.5; // 0.5-5.5立方米
                     break;
-                case "普通货物":
+                case GoodsTypeConstant.GENERAL_GOODS:
                     // 通用货物，重量和体积范围广
                     weightDouble = random.nextDouble() * 15 + 1; // 1-16吨
                     volumeDouble = random.nextDouble() * 30 + 5; // 5-35立方米
                     break;
-                case "需通风货物":
+                case GoodsTypeConstant.GOODS_REQUIREING_VENTILATION:
                     // 如农产品、纺织品，体积较大但重量较轻
                     weightDouble = random.nextDouble() * 8 + 0.5; // 0.5-8.5吨
                     volumeDouble = random.nextDouble() * 40 + 10; // 10-50立方米
                     break;
-                case "易腐货物":
+                case GoodsTypeConstant.PERISHABLE_GOODS:
                     // 如生鲜、食品，需冷藏，通常批量不大
                     weightDouble = random.nextDouble() * 6 + 0.3; // 0.3-6.3吨
                     volumeDouble = random.nextDouble() * 15 + 2; // 2-17立方米
                     break;
-                case "液体粉末":
+                case GoodsTypeConstant.LIQUID_POWDERS:
                     // 如化工液体、面粉，重量大但体积紧凑（罐式车装载）
                     weightDouble = random.nextDouble() * 20 + 5; // 5-25吨
                     volumeDouble = random.nextDouble() * 10 + 3; // 3-13立方米
                     break;
-                case "散装重物":
+                case GoodsTypeConstant.BULK_HEAVY_GOODS:
                     // 如钢材、石材，重量大、体积相对小
                     weightDouble = random.nextDouble() * 50 + 30; // 30-80吨
                     volumeDouble = random.nextDouble() * 20 + 5; // 5-25立方米
                     break;
-                case "大宗货物":
+                case GoodsTypeConstant.BULK_GOODS:
                     // 如粮食、煤炭，体积大、重量中等
                     weightDouble = random.nextDouble() * 40 + 20; // 20-60吨
                     volumeDouble = random.nextDouble() * 80 + 50; // 50-130立方米

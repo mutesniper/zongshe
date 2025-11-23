@@ -3,6 +3,7 @@ package com.muite.zongshe1.entity;
 
 import java.math.BigDecimal;
 
+
 public class Task {
     private Integer id;
     private String start;
@@ -13,6 +14,8 @@ public class Task {
 
     private BigDecimal weight;
     private BigDecimal volume;
+
+
 
 
     public Task() {

@@ -4,6 +4,7 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.muite.zongshe1.mapper.TaskMapper">
 
+
     <insert id="insert" parameterType="com.muite.zongshe1.entity.Task">
         insert into task (start,destination,goods_type,truck_id)
         values (#{start},#{destination},#{goodsType},#{truckId})
@@ -12,6 +13,11 @@
     <update id="updateTaskTruckId" parameterType="com.muite.zongshe1.entity.Task">
         UPDATE task
         SET truck_id = #{truckId}
+        WHERE id = #{id}
+    </update>
+    <update id="updateStatus" parameterType="com.muite.zongshe1.entity.Task">
+        UPDATE task
+        SET status=#{status}
         WHERE id = #{id}
     </update>
 
@@ -35,5 +41,7 @@
             )
         </foreach>
     </insert>
+
+
 
 </mapper>

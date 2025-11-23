@@ -31,6 +31,13 @@ public class Point {
         this.type = type;
     }
 
+    // 在Point.java中新增构造方法
+    public Point(String location) {
+        this.location = location;
+        this.name = ""; // 默认空名称
+        this.type = "route_point"; // 默认为路径点类型
+    }
+
 
     @Override
     public boolean equals(Object that) {
