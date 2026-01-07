@@ -8,4 +8,6 @@ public interface TaskService {
     List<Task> selectAll();
 
     void insert(Task task);
+
+    Task selectById(Integer id);
 }

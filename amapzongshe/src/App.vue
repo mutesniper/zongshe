@@ -13,17 +13,18 @@ let ws = null;
 
 // 车辆数据存储
 const vehicles = ref([]);
+const vehicleMarkers = new Map(); // 车辆标记缓存
 const connectionStatus = ref("disconnected");
 
 // WebSocket配置
 const WS_CONFIG = {
-  url: "ws://192.168.1.102:8080/vehicle-simulation",
+  url: "ws://localhost:8080/vehicle-simulation",
   reconnectInterval: 5000, // 重连间隔时间（毫秒）
 };
 
 // API配置
 const API_CONFIG = {
-  baseUrl: "http://192.168.1.102:8080",
+  baseUrl: "http://localhost:8080",
 };
 
 // 初始化WebSocket连接
@@ -46,31 +47,80 @@ function initWebSocket() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log("接收到车辆数据:", data);
-        // 添加详细的单条车辆数据结构日志，用于调试
-        if (Array.isArray(data) && data.length > 0) {
-          console.log("车辆数据结构示例:", JSON.stringify(data[0], null, 2));
-        }
-        vehicles.value = Array.isArray(data) ? data : [];
-        updateVehicleMarkers();
+        // console.log("接收到车辆数据:", data);
+        
+        // 区分批量数据(Array)和单条更新数据(Object)
+        if (Array.isArray(data)) {
+          // 批量更新：直接替换列表
+          vehicles.value = data;
+          updateVehicleMarkers();
 
-        // 如果车辆数据包含任务ID，自动加载对应路线
-        if (Array.isArray(data) && data.length > 0) {
-          data.forEach((vehicle) => {
-            if (vehicle.taskId) {
-              fetchRouteData(vehicle.taskId).then((routeData) => {
-                if (routeData) {
-                  drawRoute(routeData, vehicle.taskId);
+          // 如果车辆数据包含任务ID，自动加载对应路线，并清理已完成任务的路线
+          const activeTaskIds = new Set();
+          
+          if (data.length > 0) {
+            data.forEach((vehicle) => {
+              if (vehicle.taskId) {
+                                activeTaskIds.add(vehicle.taskId);
+                // 只有当没有画过该路线时才去fetch，避免重复请求
+                if (!routePolylines.has(vehicle.taskId)) {
+                    fetchRouteData(vehicle.taskId).then((routeData) => {
+                      if (routeData) {
+                        drawRoute(routeData, vehicle.taskId);
+                      }
+                    });
                 }
-              });
-            }
+              }
+            });
+          }
+                    
+          // 清除不再活跃的路线（已完成的任务）
+          // 排除手动加载的测试路线（假设ID为2-11的是测试路线，或者根据实际业务逻辑调整）
+          // 这里简单处理：凡是当前车辆没有引用的路线，且之前是由车辆触发加载的，都清除
+          routePolylines.forEach((_, taskId) => {
+              // 注意：这里需要确保类型一致，vehicle.taskId通常是数字
+              if (!activeTaskIds.has(taskId)) {
+                  // 稍微延迟清除，以免状态切换瞬间闪烁，或者确认任务确实完成了
+                  // 这里直接清除，视觉上就是车没了，线也没了
+                  clearRoute(taskId);
+              }
           });
+        } else if (typeof data === 'object' && data !== null) {
+          // 单条更新：找到对应车辆并更新，避免清空列表导致闪烁
+          const updatedTruck = data;
+          const id = updatedTruck.id || updatedTruck.truckId;
+          if (id) {
+            // 查找现有车辆
+            const index = vehicles.value.findIndex(v => (v.id || v.truckId) === id);
+            
+            if (index !== -1) {
+              // 存在则更新属性
+              // 关键修复：确保新对象不仅包含旧属性，还必须用新数据覆盖旧数据
+              const oldVehicle = vehicles.value[index];
+              // 更新数据源
+              vehicles.value[index] = { ...oldVehicle, ...updatedTruck };
+              
+              // 立即对该车辆执行移动操作，不等待全量 updateVehicleMarkers
+              
+              const vehicle = vehicles.value[index];
+              // updateVehicleMarkers 已经处理了更新逻辑，这里不需要重复调用 moveTo
+              // 只需要触发 updateVehicleMarkers 即可
+              // 或者，为了性能，我们这里只更新这一个marker
+              updateSingleVehicleMarker(vehicle);
+
+            } else {
+              // 不存在则添加
+              vehicles.value.push(updatedTruck);
+              updateVehicleMarkers();
+            }
+          }
         }
       } catch (e) {
         console.error("解析车辆数据失败:", e);
       }
     };
 
+       
     // 连接错误
     ws.onerror = (err) => {
       console.error("WebSocket 错误:", err);
@@ -90,8 +140,232 @@ function initWebSocket() {
   }
 }
 
-// 车辆标记缓存
-const vehicleMarkers = new Map();
+// 辅助函数：解析位置
+function parseLocation(vehicle) {
+    let lng, lat;
+    if (vehicle.location && typeof vehicle.location === "string") {
+      const coords = vehicle.location.split(",");
+      if (coords.length === 2) {
+        const val1 = parseFloat(coords[0]);
+        const val2 = parseFloat(coords[1]);
+        
+        // 智能识别经纬度（基于中国大致范围：经度73-135，纬度4-53）
+        // 如果第一个值在经度范围内且第二个值在纬度范围内 -> lng,lat
+        // 如果第二个值在经度范围内且第一个值在纬度范围内 -> lat,lng
+        if (val1 > 70 && val1 < 140 && val2 > 0 && val2 < 60) {
+           lng = val1;
+           lat = val2;
+        } else if (val2 > 70 && val2 < 140 && val1 > 0 && val1 < 60) {
+           lng = val2;
+           lat = val1;
+        } else {
+           // 默认回退：假设是 lat,lng (后端存的是这个)
+           lng = val2;
+           lat = val1;
+        }
+
+      }
+    } else if (vehicle.lon !== undefined && vehicle.lat !== undefined) {
+      lng = parseFloat(vehicle.lon);
+      lat = parseFloat(vehicle.lat);
+    }
+    if (!isNaN(lng) && !isNaN(lat)) return [lng, lat];
+    return null;
+}
+
+
+// POI数据存储
+const poiMarkers = new Map();
+const showPois = ref(true); // 是否显示POI
+const showSidebar = ref(true); // 是否显示侧边栏
+const simulationRunning = ref(true); // 仿真是否正在运行
+
+// 控制仿真状态
+async function controlSimulation(action) {
+  try {
+    const url = `${API_CONFIG.baseUrl}/simulation/${action}`;
+    const response = await fetch(url, { method: 'POST' });
+    if (response.ok) {
+      const data = await response.json();
+      simulationRunning.value = data.running;
+      console.log(`仿真${action === 'start' ? '已开始/恢复' : '已暂停'}`);
+    }
+  } catch (error) {
+    console.error("控制仿真失败:", error);
+  }
+}
+
+
+// 获取并绘制POI
+async function loadPois() {
+  try {
+    const response = await fetch(`${API_CONFIG.baseUrl}/point`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const pois = await response.json();
+    console.log(`获取到 ${pois.length} 个POI点`);
+    
+    // 绘制POI
+    drawPois(pois);
+  } catch (error) {
+    console.error("加载POI数据失败:", error);
+  }
+}
+
+// 生成Canvas标记图标
+function createCanvasMarker(type, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 40;
+  const ctx = canvas.getContext('2d');
+  
+  if (!ctx) return ''; // 异常保护
+
+  // 1. 绘制水滴形状底座
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  // 绘制一个圆头
+  ctx.arc(16, 16, 16, Math.PI, 0); 
+  // 绘制下方的尖角
+  // 贝塞尔曲线让形状更圆润
+  ctx.bezierCurveTo(32, 26, 22, 32, 16, 40);
+  ctx.bezierCurveTo(10, 32, 0, 26, 0, 16);
+  ctx.fill();
+  
+  // 2. 绘制白色圆形背景
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(16, 16, 10, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // 3. 绘制内部文字（类型首字）
+  // 选取类型的第一个字符，如果是英文则取首字母
+  const text = type ? type.charAt(0) : '点';
+  
+  ctx.fillStyle = color; // 文字颜色与底座一致
+  ctx.font = 'bold 14px "Microsoft YaHei", sans-serif'; // 加粗字体
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 微调文字位置，使其视觉居中（y=16是圆心，但由于字体基线原因可能需要微调）
+  ctx.fillText(text, 16, 17);
+  
+  // 返回 PNG 格式的 Data URL
+  return canvas.toDataURL('image/png');
+}
+
+// POI类型颜色映射
+const poiColors = {
+  '仓库': '#607D8B',      // 蓝灰
+  '商场': '#FF9800',      // 橙色
+  '公司企业': '#2196F3',  // 蓝色
+  '购物服务': '#E91E63',  // 粉色
+  '科教文化服务': '#9C27B0', // 紫色
+  '商务住宅': '#795548',  // 棕色
+  '生活服务': '#4CAF50',  // 绿色
+  '汽车服务': '#3F51B5',  // 靛蓝
+  '医疗保健服务': '#F44336', // 红色
+  'default': '#009688'    // 默认青色
+};
+
+// 绘制POI点
+function drawPois(pois) {
+  if (!map || !AMap) return;
+  
+  // 清除旧的POI标记
+  clearPois();
+  
+  // 1. 准备样式数组
+  // 获取所有出现的类型，加上默认类型
+  const types = Object.keys(poiColors);
+  const styles = types.map(type => ({
+    url: createCanvasMarker(type, poiColors[type]),
+    anchor: new AMap.Pixel(16, 40), // 锚点在底部中心 (32x40尺寸)
+    size: new AMap.Size(32, 40)
+  }));
+  
+  // 创建类型到样式索引的映射
+  const typeStyleIndex = {};
+  types.forEach((type, index) => {
+    typeStyleIndex[type] = index;
+  });
+  const defaultStyleIndex = typeStyleIndex['default'];
+
+  // 2. 准备数据
+  const massMarksData = pois.map(poi => {
+    const coords = poi.location.split(",");
+    let lng, lat;
+    if (coords.length === 2) {
+       lat = parseFloat(coords[0]);
+       lng = parseFloat(coords[1]);
+       
+       if (lat > 70 && lat < 140) {
+           const temp = lat;
+           lat = lng;
+           lng = temp;
+       }
+    }
+        
+    // 确定样式索引
+    let styleIndex = typeStyleIndex[poi.type];
+    if (styleIndex === undefined) {
+        styleIndex = defaultStyleIndex;
+    }
+    
+    return {
+      lnglat: [lng, lat],
+      name: poi.name,
+      type: poi.type,
+      style: styleIndex // 使用对应的样式索引
+    };
+  }).filter(p => !isNaN(p.lnglat[0]) && !isNaN(p.lnglat[1]));
+
+
+  const massMarks = new AMap.MassMarks(massMarksData, {
+    zIndex: 5,
+    zooms: [3, 19],
+    style: styles // 传入样式数组
+  });
+
+  massMarks.setMap(map);
+  
+  // 点击事件
+  massMarks.on('click', function (e) {
+    const marker = e.data;
+    const color = poiColors[marker.type] || poiColors['default'];
+    const infoWindow = new AMap.InfoWindow({
+        content: `<div style="padding: 5px;">
+            <b style="color: ${color}">${marker.name}</b><br>
+            类型: ${marker.type}<br>
+            坐标: ${marker.lnglat}
+        </div>`,
+        offset: new AMap.Pixel(0, -40) // 调整信息窗偏移
+    });
+    infoWindow.open(map, marker.lnglat);
+  });
+  
+  // 保存引用以便清除
+  poiMarkers.set('massMarks', massMarks);
+  console.log(`已绘制 ${massMarksData.length} 个POI点`);
+}
+
+// 清除POI
+function clearPois() {
+  if (poiMarkers.has('massMarks')) {
+    poiMarkers.get('massMarks').setMap(null);
+    poiMarkers.delete('massMarks');
+  }
+}
+
+// 切换POI显示
+function togglePois() {
+    showPois.value = !showPois.value;
+    if (showPois.value) {
+        loadPois();
+    } else {
+        clearPois();
+    }
+}
 
 // 路线数据存储
 const routes = ref([]);
@@ -237,11 +511,29 @@ function drawRoute(routeData, taskId) {
   const sortedPoints = routeData
     .sort((a, b) => a.sequence - b.sequence)
     .map((point) => {
-      const [lng, lat] = point.pointLocation
-        .split(",")
-        .map((coord) => parseFloat(coord));
+            // 数据库中存储的是 Lat,Lon (例如 39.9,116.3)
+      // 需要解析并确保格式为 [Lng, Lat]
+      const parts = point.pointLocation.split(",").map((coord) => parseFloat(coord));
+      let lng, lat;
+      
+      if (parts.length >= 2) {
+          const val1 = parts[0];
+          const val2 = parts[1];
+          // 智能识别：经度通常在 73-135 之间，纬度在 3-54 之间
+          if (val1 > 70 && val1 < 140) {
+              lng = val1;
+              lat = val2;
+          } else {
+              lng = val2;
+              lat = val1;
+          }
+      } else {
+          return null;
+      }
+  
       return [lng, lat];
-    });
+        })
+    .filter(p => p !== null);
 
   if (sortedPoints.length < 2) {
     console.warn(`任务${taskId}的路线点数不足，无法绘制路线`);
@@ -376,235 +668,121 @@ function updateVehicleMarkers() {
 
   // 更新或添加车辆标记
   vehicles.value.forEach((vehicle) => {
-    const id = vehicle.id || vehicle.truckId;
-    if (!id) return;
-
-    // 尝试多种可能的坐标字段名
-    let lng, lat;
-
-    // 检查常见的坐标字段名
-    // 1. 基础经纬度字段
-    if (vehicle.lon !== undefined && vehicle.lat !== undefined) {
-      lng = parseFloat(vehicle.lon);
-      lat = parseFloat(vehicle.lat);
-    }
-    // 2. x/y坐标
-    else if (vehicle.x !== undefined && vehicle.y !== undefined) {
-      lng = parseFloat(vehicle.x);
-      lat = parseFloat(vehicle.y);
-    }
-    // 3. 大写首字母经纬度
-    else if (
-      vehicle.Longitude !== undefined &&
-      vehicle.Latitude !== undefined
-    ) {
-      lng = parseFloat(vehicle.Longitude);
-      lat = parseFloat(vehicle.Latitude);
-    }
-    // 4. 简短大写经纬度
-    else if (vehicle.Lon !== undefined && vehicle.Lat !== undefined) {
-      lng = parseFloat(vehicle.Lon);
-      lat = parseFloat(vehicle.Lat);
-    }
-    // 5. 位置对象或数组
-    else if (
-      vehicle.position &&
-      Array.isArray(vehicle.position) &&
-      vehicle.position.length >= 2
-    ) {
-      lng = parseFloat(vehicle.position[0]);
-      lat = parseFloat(vehicle.position[1]);
-    }
-    // 6. 位置对象（包含lng/lat属性）
-    else if (
-      vehicle.position &&
-      vehicle.position.lng !== undefined &&
-      vehicle.position.lat !== undefined
-    ) {
-      lng = parseFloat(vehicle.position.lng);
-      lat = parseFloat(vehicle.position.lat);
-    }
-    // 7. 位置对象（包含longitude/latitude属性）
-    else if (
-      vehicle.position &&
-      vehicle.position.longitude !== undefined &&
-      vehicle.position.latitude !== undefined
-    ) {
-      lng = parseFloat(vehicle.position.longitude);
-      lat = parseFloat(vehicle.position.latitude);
-    }
-    // 8. location对象
-    else if (
-      vehicle.location &&
-      Array.isArray(vehicle.location) &&
-      vehicle.location.length >= 2
-    ) {
-      lng = parseFloat(vehicle.location[0]);
-      lat = parseFloat(vehicle.location[1]);
-    }
-    // 9. coordinates数组
-    else if (
-      vehicle.coordinates &&
-      Array.isArray(vehicle.coordinates) &&
-      vehicle.coordinates.length >= 2
-    ) {
-      lng = parseFloat(vehicle.coordinates[0]);
-      lat = parseFloat(vehicle.coordinates[1]);
-    }
-    // 10. location字符串格式 "lng,lat"
-    else if (vehicle.location && typeof vehicle.location === "string") {
-      const coords = vehicle.location.split(",");
-      if (coords.length === 2) {
-        lng = parseFloat(coords[0]);
-        lat = parseFloat(coords[1]);
-      }
-    }
-    // 11. 可能的中文字段名
-    else if (vehicle.经度 !== undefined && vehicle.纬度 !== undefined) {
-      lng = parseFloat(vehicle.经度);
-      lat = parseFloat(vehicle.纬度);
-    }
-    // 12. 检查完整字段名
-    else if (
-      vehicle.longitude !== undefined &&
-      vehicle.latitude !== undefined
-    ) {
-      lng = parseFloat(vehicle.longitude);
-      lat = parseFloat(vehicle.latitude);
-    } else {
-      // 如果找不到坐标，使用默认坐标（北京市中心附近的随机位置）
-      console.warn(`车辆${id}没有找到坐标信息，使用默认位置`, {
-        vehicle: vehicle,
-        availableFields: Object.keys(vehicle),
-        locationValue: vehicle.location,
-        locationType: typeof vehicle.location,
-      });
-      // 在北京市中心附近生成随机坐标，并为不同车辆分配不同位置，避免重叠
-      const angle = (id * 36 * Math.PI) / 180; // 为10辆车分配不同角度
-      lng = 116.397428 + Math.cos(angle) * 0.05;
-      lat = 39.90923 + Math.sin(angle) * 0.05;
-    }
-
-    // 确保坐标有效
-    lng = isNaN(lng) ? 116.397428 + (Math.random() - 0.5) * 0.1 : lng;
-    lat = isNaN(lat) ? 39.90923 + (Math.random() - 0.5) * 0.1 : lat;
-
-    const position = [lng, lat];
-
-    // 记录成功解析的坐标信息
-    console.log(`车辆${id}坐标解析成功:`, {
-      originalLocation: vehicle.location,
-      parsedPosition: position,
-      lng: lng,
-      lat: lat,
-    });
-
-    if (vehicleMarkers.has(id)) {
-      // 更新现有标记位置和状态
-      const marker = vehicleMarkers.get(id);
-      marker.setPosition(position);
-
-      // 更新标记标题以反映最新状态
-      marker.setTitle(
-        `${vehicle.plateNumber || `车辆${id}`} - 状态: ${
-          vehicle.status || "未知"
-        }`
-      );
-
-      // 如果需要，也可以更新图标（根据状态变化）
-      let carIcon = "https://webapi.amap.com/images/car.png";
-      if (vehicle.status === "运输中") {
-        carIcon = "https://webapi.amap.com/images/car.png";
-      } else if (vehicle.status === "空闲" || vehicle.status === "online") {
-        carIcon = "https://webapi.amap.com/images/car.png";
-      } else if (vehicle.status === "离线" || vehicle.status === "offline") {
-        carIcon = "https://webapi.amap.com/images/car.png";
-      }
-
-      // 使用AMap.Icon对象来确保图标完整显示
-      const icon = new AMap.Icon({
-        size: new AMap.Size(52, 26), // 图标尺寸
-        image: carIcon, // 图标图片URL
-        imageSize: new AMap.Size(52, 26), // 图片显示尺寸
-        imageOffset: new AMap.Pixel(0, 0), // 图片偏移
-      });
-
-      marker.setIcon(icon);
-      marker.setOffset(new AMap.Pixel(-26, -13)); // 车辆图标52x26，以中心底部为原点偏移(-26, -13)
-      marker.setAutoRotation(true); // 启用自动旋转
-      marker.setAngle(-90); // 设置初始角度
-    } else {
-      // 创建新标记
-      // 使用指定的车辆图标
-      let carIcon = "https://webapi.amap.com/images/car.png";
-
-      // 根据车辆状态可以调整图标（如果有的话）
-      if (vehicle.status === "运输中") {
-        carIcon = "https://webapi.amap.com/images/car.png"; // 运输中车辆
-      } else if (vehicle.status === "空闲" || vehicle.status === "online") {
-        carIcon = "https://webapi.amap.com/images/car.png"; // 空闲车辆
-      } else if (vehicle.status === "离线" || vehicle.status === "offline") {
-        carIcon = "https://webapi.amap.com/images/car.png"; // 离线车辆
-      }
-
-      // 使用AMap.Icon对象来确保图标完整显示
-      const carIconObj = new AMap.Icon({
-        size: new AMap.Size(52, 26), // 图标尺寸
-        image: carIcon, // 图标图片URL
-        imageSize: new AMap.Size(52, 26), // 图片显示尺寸
-        imageOffset: new AMap.Pixel(0, 0), // 图片偏移
-      });
-
-      const marker = new AMap.Marker({
-        map: map, // 直接指定map
-        position: position,
-        title: `${vehicle.plateNumber || `车辆${id}`} - 状态: ${
-          vehicle.status || "未知"
-        }`,
-        icon: carIconObj,
-        // 点标记显示位置偏移量，默认值为Pixel(-10,-34)。因为图片都是矩形的放到地图上可能位置不太对通过这个属性可以调一调位置
-        offset: new AMap.Pixel(-26, -13), // 车辆图标52x26，以中心底部为原点偏移(-26, -13)
-        // 是否自动旋转 点标记在使用moveAlong动画时，路径方向若有变化，点标记是否自动调整角度，默认为false。广泛用于自动调节车辆行驶方向。
-        autoRotation: true,
-        // 点标记的旋转角度，广泛用于改变车辆行驶方向
-        // 因为图片可能方向不太对通过这个旋转一下图片，但是这个不要和autoRotation混淆了哦，这个angle是图片刚加载出来之后的旋转角度，autoRotation是在angle基础上进行旋转哦
-        angle: -90,
-        label: {
-          content: vehicle.plateNumber || `车辆${id}`,
-          direction: "top",
-          offset: new AMap.Pixel(0, -10), // 调整标签位置避免遮挡
-        },
-        // 添加动画效果增强视觉体验
-        animation: "AMAP_ANIMATION_DROP",
-      });
-
-      // 添加标记到地图
-      marker.setMap(map);
-      vehicleMarkers.set(id, marker);
-
-      // 添加点击事件
-      marker.on("click", () => {
-        // 显示车辆信息弹窗
-        try {
-          const infoWindow = new AMap.InfoWindow({
-            content: `<div style="padding: 10px;">
-              <p><strong>车辆ID:</strong> ${id}</p>
-              <p><strong>车牌号:</strong> ${vehicle.plateNumber || "未知"}</p>
-              <p><strong>位置:</strong> ${position[1].toFixed(
-                6
-              )}, ${position[0].toFixed(6)}</p>
-              <p><strong>状态:</strong> ${vehicle.status || "正常"}</p>
-            </div>`,
-            // 使用数字数组代替AMap.Pixel对象
-            offset: [0, -30],
-          });
-          infoWindow.open(map, position);
-        } catch (e) {
-          console.error(`打开车辆${id}信息窗口失败:`, e);
-        }
-      });
-    }
+    updateSingleVehicleMarker(vehicle);
   });
+}
+
+// 更新单个车辆标记
+function updateSingleVehicleMarker(vehicle) {
+  const id = vehicle.id || vehicle.truckId;
+  if (!id) return;
+
+  // 解析坐标
+  let lng, lat;
+  const parsed = parseLocation(vehicle);
+  if (parsed) {
+    lng = parsed[0];
+    lat = parsed[1];
+  } else {
+    // 兼容其他字段
+    if (vehicle.x !== undefined && vehicle.y !== undefined) { lng = parseFloat(vehicle.x); lat = parseFloat(vehicle.y); }
+    else if (vehicle.longitude !== undefined && vehicle.latitude !== undefined) { lng = parseFloat(vehicle.longitude); lat = parseFloat(vehicle.latitude); }
+    else {
+        // 默认坐标
+        const angle = (id * 36 * Math.PI) / 180;
+        lng = 116.397428 + Math.cos(angle) * 0.05;
+        lat = 39.90923 + Math.sin(angle) * 0.05;
+    }
+  }
+  
+  // 确保坐标有效
+  if (isNaN(lng) || isNaN(lat)) {
+      lng = 116.397428; lat = 39.90923;
+  }
+  
+  const position = [lng, lat];
+
+  // 确定图标和状态
+  let carIcon = "https://webapi.amap.com/images/car.png";
+  let isCar = true;
+
+  if (vehicle.status === "装货") {
+    carIcon = "https://a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-red.png";
+    isCar = false;
+  } else if (vehicle.status === "卸货") {
+    carIcon = "https://a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-default.png";
+    isCar = false;
+  } else if (vehicle.status === "故障") {
+    carIcon = "https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png";
+    isCar = false;
+  }
+  // "拥堵"、"运输中"、"空闲" 使用默认车辆图标
+
+  // 准备图标内容
+  let content = "";
+  let offset;
+
+  if (isCar) {
+    // 车辆图标：旋转90度使其朝右（适配autoRotation）
+    content = `<img src="${carIcon}" style="width: 52px; height: 26px; transform: rotate(90deg); display: block;">`;
+    offset = new AMap.Pixel(-26, -13);
+  } else {
+    // 普通图标：不旋转，底部中心对齐
+    content = `<img src="${carIcon}" style="width: 25px; height: 34px; display: block;">`;
+    offset = new AMap.Pixel(-12, -34);
+  }
+
+  // 更新或创建标记
+  if (vehicleMarkers.has(id)) {
+    const marker = vehicleMarkers.get(id);
+    
+    // 平滑移动
+    const currentPos = marker.getPosition();
+    if (Math.abs(currentPos.lng - lng) > 0.000001 || Math.abs(currentPos.lat - lat) > 0.000001) {
+      marker.moveTo(position, {
+        duration: 5000,
+        autoRotation: isCar,
+      });
+    }
+    
+    // 更新样式和标题
+    marker.setContent(content);
+    marker.setOffset(offset);
+    marker.setTitle(`${vehicle.plateNumber || `车辆${id}`} - 状态: ${vehicle.status || "未知"}`);
+    
+  } else {
+    // 创建新标记
+    const marker = new AMap.Marker({
+      map: map,
+      position: position,
+      title: `${vehicle.plateNumber || `车辆${id}`} - 状态: ${vehicle.status || "未知"}`,
+      content: content,
+      offset: offset,
+      autoRotation: isCar,
+      label: {
+        content: vehicle.plateNumber || `车辆${id}`,
+        direction: "top",
+        offset: new AMap.Pixel(0, -10),
+      },
+      animation: "AMAP_ANIMATION_DROP",
+    });
+    
+    vehicleMarkers.set(id, marker);
+    
+    // 点击事件
+    marker.on("click", () => {
+      const infoWindow = new AMap.InfoWindow({
+        content: `<div style="padding: 10px;">
+          <p><strong>车辆ID:</strong> ${id}</p>
+          <p><strong>车牌号:</strong> ${vehicle.plateNumber || "未知"}</p>
+          <p><strong>位置:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}</p>
+          <p><strong>状态:</strong> ${vehicle.status || "正常"}</p>
+        </div>`,
+        offset: [0, -30],
+      });
+      infoWindow.open(map, position);
+    });
+  }
 }
 
 // 初始化地图
@@ -623,7 +801,7 @@ onMounted(() => {
     AMapLoader.load({
       key: AMAP_CONFIG.key,
       version: AMAP_CONFIG.version,
-      plugins: ["AMap.ToolBar", "AMap.Scale", "AMap.HawkEye"],
+      plugins: ["AMap.ToolBar", "AMap.Scale", "AMap.HawkEye", "AMap.MoveAnimation"],
       AMapUI: {
         version: "1.1",
         plugins: [],
@@ -657,6 +835,7 @@ onMounted(() => {
           // 自动加载所有路线数据
           setTimeout(() => {
             loadAllRoutes();
+            loadPois(); // 自动加载POI
           }, 1000); // 延迟1秒确保地图完全初始化
         } catch (err) {
           console.error("地图实例创建失败:", err);
@@ -739,7 +918,45 @@ onUnmounted(() => {
 
   // 清除所有路线
   clearAllRoutes();
+    
+  // 清除POI
+  clearPois();
 });
+
+// 格式化位置显示
+function formatLocation(loc) {
+    if (!loc) return '-';
+    if (typeof loc === 'string') {
+        const parts = loc.split(',');
+        if (parts.length >= 2) {
+            return `${parseFloat(parts[1]).toFixed(4)}, ${parseFloat(parts[0]).toFixed(4)}`;
+        }
+        return loc;
+    }
+    return '-';
+}
+
+// 获取状态样式类
+function getStatusClass(status) {
+    if (status === '运输中') return 'status-transit';
+    if (status === '装货') return 'status-loading';
+    if (status === '卸货') return 'status-unloading';
+    if (status === '空闲') return 'status-idle';
+    if (status === '故障' || status === '拥堵') return 'status-warning';
+    return '';
+}
+
+// 聚焦车辆
+function focusVehicle(vehicle) {
+    const id = vehicle.id || vehicle.truckId;
+    if (vehicleMarkers.has(id)) {
+        const marker = vehicleMarkers.get(id);
+        const pos = marker.getPosition();
+        map.setZoomAndCenter(17, pos);
+        // 触发点击事件显示信息窗
+        marker.emit('click', { target: marker });
+    }
+}
 </script>
 
 <template>
@@ -757,7 +974,7 @@ onUnmounted(() => {
         }}
       </div>
       <div class="vehicle-count">车辆数量: {{ vehicles.length }}</div>
-      <div class="route-count">路线数量: {{ routeCount }}/10</div>
+      <div class="route-count">路线数量: {{ routeCount }}</div>
       <button
         class="load-routes-btn"
         @click="loadAllRoutes"
@@ -765,6 +982,81 @@ onUnmounted(() => {
       >
         重新加载路线
       </button>
+      <button
+        class="load-routes-btn"
+        @click="togglePois"
+        style="margin-left: 10px; background-color: #10b981;"
+        title="显示/隐藏POI"
+      >
+        {{ showPois ? '隐藏POI' : '显示POI' }}
+      </button>
+            <button
+        class="load-routes-btn"
+        @click="showSidebar = !showSidebar"
+        style="margin-left: 10px; background-color: #f59e0b;"
+        title="显示/隐藏车辆列表"
+      >
+        {{ showSidebar ? '隐藏列表' : '车辆列表' }}
+      </button>
+
+      <!-- 仿真控制按钮组 -->
+      <div class="control-group">
+        <button
+          class="control-btn btn-start"
+          @click="controlSimulation('start')"
+          :disabled="simulationRunning"
+          title="开始/恢复仿真"
+        >
+          ▶ 开始
+        </button>
+        <button
+          class="control-btn btn-pause"
+          @click="controlSimulation('pause')"
+          :disabled="!simulationRunning"
+          title="暂停仿真"
+        >
+          ⏸ 暂停
+        </button>
+      </div>
+    </div>
+
+    <!-- 车辆信息侧边栏 -->
+    <div class="vehicle-sidebar" :class="{ 'sidebar-hidden': !showSidebar }">
+      <div class="sidebar-header">
+        <h3>车辆监控列表</h3>
+        <span class="close-btn" @click="showSidebar = false">×</span>
+      </div>
+      <div class="sidebar-content">
+        <div v-if="vehicles.length === 0" class="no-data">
+          暂无在线车辆
+        </div>
+        <div 
+          v-else 
+          v-for="vehicle in vehicles" 
+          :key="vehicle.id || vehicle.truckId"
+          class="vehicle-card"
+          @click="focusVehicle(vehicle)"
+        >
+          <div class="vehicle-header">
+            <span class="plate-number">{{ vehicle.plateNumber || `车辆${vehicle.id || vehicle.truckId}` }}</span>
+            <span class="status-badge" :class="getStatusClass(vehicle.status)">{{ vehicle.status || '未知' }}</span>
+          </div>
+          <div class="vehicle-detail">
+            <div class="detail-item">
+              <span class="label">类型:</span>
+              <span class="value">{{ vehicle.type || '普通货车' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="label">任务:</span>
+              <span class="value">{{ vehicle.taskId ? `任务#${vehicle.taskId}` : '无任务' }}</span>
+            </div>
+             <div class="detail-item" v-if="vehicle.location">
+              <span class="label">位置:</span>
+              <span class="value">{{ formatLocation(vehicle.location) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -841,6 +1133,164 @@ onUnmounted(() => {
 
 .load-routes-btn:active {
   background: #1e40af;
+}
+
+/* 仿真控制按钮组 */
+.control-group {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+  border-top: 1px solid #eee;
+  padding-top: 10px;
+}
+
+.control-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: white;
+  transition: all 0.2s;
+}
+
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-start {
+  background-color: #3b82f6;
+}
+
+.btn-start:hover:not(:disabled) {
+  background-color: #2563eb;
+}
+
+.btn-pause {
+  background-color: #ef4444;
+}
+
+.btn-pause:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+/* 侧边栏样式 */
+.vehicle-sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100%;
+  background: white;
+  box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+  z-index: 1001;
+  transition: transform 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-hidden {
+  transform: translateX(100%);
+}
+
+.sidebar-header {
+  padding: 15px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #f8f9fa;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.close-btn {
+  cursor: pointer;
+  font-size: 20px;
+  color: #999;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.no-data {
+  text-align: center;
+  color: #999;
+  padding: 20px;
+}
+
+.vehicle-card {
+  background: white;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.vehicle-card:hover {
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  border-color: #3366ff;
+}
+
+.vehicle-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.plate-number {
+  font-weight: bold;
+  font-size: 15px;
+  color: #333;
+}
+
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: #eee;
+  color: #666;
+}
+
+.status-transit { background: #e3f2fd; color: #1976d2; }
+.status-loading { background: #ffebee; color: #d32f2f; }
+.status-unloading { background: #e8f5e9; color: #388e3c; }
+.status-idle { background: #f5f5f5; color: #757575; }
+.status-warning { background: #fff3e0; color: #f57c00; }
+
+.vehicle-detail {
+  font-size: 12px;
+  color: #666;
+}
+
+.detail-item {
+  display: flex;
+  margin-bottom: 4px;
+}
+
+.detail-item .label {
+  width: 40px;
+  color: #999;
+}
+
+.detail-item .value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
 

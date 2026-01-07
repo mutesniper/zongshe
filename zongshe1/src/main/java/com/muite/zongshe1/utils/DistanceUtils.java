@@ -3,24 +3,26 @@ package com.muite.zongshe1.utils;
 
 public class DistanceUtils {
     /**
-     * 从"纬度,经度"格式的字符串中解析出纬度
+     * 从"经度,纬度"格式的字符串中解析出纬度
      */
     public static double parseLatitude(String locationStr) {
         if (locationStr == null || !locationStr.contains(",")) {
             throw new IllegalArgumentException("无效的经纬度格式：" + locationStr);
         }
-        return Double.parseDouble(locationStr.split(",")[0].trim());
+        // 高德格式：经度,纬度 -> split[1]是纬度
+        return Double.parseDouble(locationStr.split(",")[1].trim());
     }
 
 
     /**
-     * 从"纬度,经度"格式的字符串中解析出经度
+     * 从"经度,纬度"格式的字符串中解析出经度
      */
     public static double parseLongitude(String locationStr) {
         if (locationStr == null || !locationStr.contains(",")) {
             throw new IllegalArgumentException("无效的经纬度格式：" + locationStr);
         }
-        return Double.parseDouble(locationStr.split(",")[1].trim());
+        // 高德格式：经度,纬度 -> split[0]是经度
+        return Double.parseDouble(locationStr.split(",")[0].trim());
     }
 
 

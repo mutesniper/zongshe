@@ -6,8 +6,8 @@
 
 
     <insert id="insert" parameterType="com.muite.zongshe1.entity.Task">
-        insert into task (start,destination,goods_type,truck_id)
-        values (#{start},#{destination},#{goodsType},#{truckId})
+        insert into task (start,destination,goods_type,truck_id,sender_id,receiver_id,sender_name,receiver_name)
+        values (#{start},#{destination},#{goodsType},#{truckId},#{senderId},#{receiverId},#{senderName},#{receiverName})
     </insert>
 
     <update id="updateTaskTruckId" parameterType="com.muite.zongshe1.entity.Task">
@@ -26,8 +26,12 @@
         SELECT * FROM task
     </select>
 
+    <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultType="com.muite.zongshe1.entity.Task">
+        select * from task where id = #{id,jdbcType=INTEGER}
+    </select>
+
     <insert id="batchInsert" parameterType="java.util.List">
-        INSERT INTO task (start, destination, goods_type, status, truck_id,weight,volume)
+        INSERT INTO task (start, destination, goods_type, status, truck_id,weight,volume,sender_id,receiver_id,sender_name,receiver_name)
         VALUES
         <foreach collection="list" item="task" separator=",">
             (
@@ -37,7 +41,11 @@
             #{task.status},
             #{task.truckId},
             #{task.weight},
-            #{task.volume}
+            #{task.volume},
+            #{task.senderId},
+            #{task.receiverId},
+            #{task.senderName},
+            #{task.receiverName}
             )
         </foreach>
     </insert>

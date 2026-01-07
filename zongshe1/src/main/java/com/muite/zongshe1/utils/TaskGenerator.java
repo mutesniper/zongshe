@@ -38,11 +38,14 @@ public class TaskGenerator {
 
     private final PointMapper pointMapper;
     private final TaskMapper taskMapper;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate; // 注入JdbcTemplate查询客户
+
 
     // 构造函数注入依赖
-    public TaskGenerator(PointMapper pointMapper, TaskMapper taskMapper) {
+    public TaskGenerator(PointMapper pointMapper, TaskMapper taskMapper, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
         this.pointMapper = pointMapper;
         this.taskMapper = taskMapper;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     /**
@@ -57,19 +60,36 @@ public class TaskGenerator {
             throw new RuntimeException("POI数据不足2条，无法生成任务（需不同起点和终点）");
         }
 
+        // 查询所有发货方和收货方
+        List<com.muite.zongshe1.entity.Customer> senders = new ArrayList<>();
+        List<com.muite.zongshe1.entity.Customer> receivers = new ArrayList<>();
+        try {
+             senders = jdbcTemplate.query("SELECT * FROM customer WHERE type='发货方'", new org.springframework.jdbc.core.BeanPropertyRowMapper<>(com.muite.zongshe1.entity.Customer.class));
+             receivers = jdbcTemplate.query("SELECT * FROM customer WHERE type='收货方'", new org.springframework.jdbc.core.BeanPropertyRowMapper<>(com.muite.zongshe1.entity.Customer.class));
+        } catch (Exception e) {
+            log.warn("查询客户信息失败，将不绑定客户", e);
+        }
+
         List<Task> taskList = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            // 2. 随机选择起点和终点（确保起点≠终点）
-
-            // 筛选起点（仓库类型）
+            // ... (省略部分代码) ...
+            
+            // 筛选起点和终点
             List<Point> startCandidates = poiList.stream()
-                    .filter(poi -> PoiTypeConstant.WAREHOUSE.equals(poi.getType()))
+                    .filter(poi -> PoiTypeConstant.WAREHOUSE.equals(poi.getType()) || 
+                                   PoiTypeConstant.FACTORY.equals(poi.getType()) || 
+                                   PoiTypeConstant.LOGISTICS_CENTER.equals(poi.getType()))
                     .collect(Collectors.toList());
-            // 筛选终点（商场类型）
+
             List<Point> endCandidates = poiList.stream()
-                    .filter(poi -> PoiTypeConstant.SHOPPING_MALL.equals(poi.getType()))
+                    .filter(poi -> PoiTypeConstant.SHOPPING_MALL.equals(poi.getType()) || 
+                                   PoiTypeConstant.SUPERMARKET.equals(poi.getType()) ||
+                                   PoiTypeConstant.GAS_STATION.equals(poi.getType()))
                     .collect(Collectors.toList());
             
+            if (startCandidates.isEmpty()) startCandidates = poiList;
+            if (endCandidates.isEmpty()) endCandidates = poiList;
+
             Point startPoi = startCandidates.get(random.nextInt(startCandidates.size()));
             Point endPoi = endCandidates.get(random.nextInt(endCandidates.size()));
 
@@ -109,13 +129,13 @@ public class TaskGenerator {
                     break;
                 case GoodsTypeConstant.BULK_HEAVY_GOODS:
                     // 如钢材、石材，重量大、体积相对小
-                    weightDouble = random.nextDouble() * 50 + 30; // 30-80吨
+                    weightDouble = random.nextDouble() * 40 + 20; // 20-60吨
                     volumeDouble = random.nextDouble() * 20 + 5; // 5-25立方米
                     break;
                 case GoodsTypeConstant.BULK_GOODS:
                     // 如粮食、煤炭，体积大、重量中等
-                    weightDouble = random.nextDouble() * 40 + 20; // 20-60吨
-                    volumeDouble = random.nextDouble() * 80 + 50; // 50-130立方米
+                    weightDouble = random.nextDouble() * 30 + 10; // 10-40吨
+                    volumeDouble = random.nextDouble() * 50 + 30; // 30-80立方米
                     break;
                 default:
                     weightDouble = 0.0;
@@ -139,6 +159,18 @@ public class TaskGenerator {
             task.setTruckId(null); // 未分配车辆
             task.setWeight(weight); // 设置重量
             task.setVolume(volume); // 设置体积
+            
+            // 随机分配发货人和收货人
+            if (!senders.isEmpty()) {
+                com.muite.zongshe1.entity.Customer sender = senders.get(random.nextInt(senders.size()));
+                task.setSenderId(sender.getId());
+                task.setSenderName(sender.getName());
+            }
+            if (!receivers.isEmpty()) {
+                com.muite.zongshe1.entity.Customer receiver = receivers.get(random.nextInt(receivers.size()));
+                task.setReceiverId(receiver.getId());
+                task.setReceiverName(receiver.getName());
+            }
 
             taskList.add(task);
         }
@@ -156,17 +188,28 @@ public class TaskGenerator {
 
     // TODO 修改间隔时间并打开
     /**
-     * 定时自动生成任务（每小时生成5条）
+     * 定时自动生成任务（每30秒生成3条，确保任务充足且循环）
      */
-/*    @Scheduled(fixedRate = 3600000) // 间隔时间：3600000毫秒 = 1小时
+    @Scheduled(fixedRate = 30000) // 间隔时间：30000毫秒 = 30秒
     public void autoGenerateTasks() {
         try {
-            // 每小时生成5条任务（可根据需求调整数量）
-            generateRandomTasks(5);
-            log.info("定时任务执行：自动生成5条任务");
+                        // 检查当前未完成的任务数量，避免无限堆积
+            int incompleteTasks = taskMapper.countIncompleteTasks(); // 需在TaskMapper添加此方法
+            if (incompleteTasks < 50) { // 保持池中有一定量的任务
+                generateRandomTasks(3);
+                log.info("定时任务执行：自动生成3条任务，当前未完成任务数: {}", incompleteTasks + 3);
+            } else {
+                log.info("当前任务充足 ({})，跳过本次生成", incompleteTasks);
+            }
         } catch (Exception e) {
-            log.error("定时任务生成任务失败", e);
+                        // 暂时忽略 countIncompleteTasks 不存在导致的错误，先直接生成
+            try {
+                 generateRandomTasks(3);
+                 log.info("定时任务执行：自动生成3条任务");
+            } catch (Exception ex) {
+                log.error("定时任务生成任务失败", ex);
+            }
         }
     }
-    */
+    
 }

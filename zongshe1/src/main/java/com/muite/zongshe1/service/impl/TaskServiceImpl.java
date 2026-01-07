@@ -21,4 +21,9 @@ public class TaskServiceImpl implements TaskService {
     public void insert(Task task) {
         taskMapper.insert(task);
     }
+
+    @Override
+    public Task selectById(Integer id) {
+        return taskMapper.selectByPrimaryKey(id);
+    }
 }

@@ -38,6 +38,12 @@ public class TaskController {
         return taskService.selectAll();
     }
 
+    @Operation(summary = "根据ID查询任务")
+    @GetMapping("/task/{id}")
+    public Task selectById(@PathVariable Integer id) {
+        return taskService.selectById(id);
+    }
+
     @Operation(summary = "添加任务")
     @PostMapping("/task")
     public void createTask(@RequestBody Task task) {

@@ -35,6 +35,11 @@ public class PoiCrawler {
 
     @Value("${poi.crawler.max-pages}")
     private int maxPages;
+    
+    // 目标城市列表：覆盖全国主要区域
+    private static final String[] TARGET_CITIES = {
+        "北京", "上海", "广州", "深圳", "成都", "武汉", "西安", "南京", "杭州", "沈阳", "郑州", "长沙"
+    };
 
     private final JdbcTemplate jdbcTemplate;
     private final RestTemplate restTemplate;
@@ -50,7 +55,57 @@ public class PoiCrawler {
     public void init() {
         if (autoRun) {
             log.info(" 启动时自动爬取 POI 数据...");
+            
+            // 1. 检查数据库状态
+            Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM poi", Integer.class);
+            if (count != null && count > 0) {
+                 log.info("检测到数据库已有 {} 条POI数据，跳过初始化爬取（保留现有数据）", count);
+                 // 直接返回，不再执行清理或爬取
+                 return;
+            }
+
+            // 2. 多城市爬取（仅在数据为空时执行）
+            crawlMultiCityData();
+        }
+    }
+
+    private void cleanupOldData() {
+        log.warn("正在清理旧POI数据及相关任务...");
+        try {
+            // 临时禁用外键检查，以便直接Truncate
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
+            
+            // 清理任务关联表
+            jdbcTemplate.execute("TRUNCATE TABLE task_route_point");
+            // 清理任务表
+            jdbcTemplate.execute("TRUNCATE TABLE task");
+            // 清理POI表
+            jdbcTemplate.execute("TRUNCATE TABLE poi");
+            
+            // 重置车辆状态（因为任务没了）
+            jdbcTemplate.execute("UPDATE truck SET status='空闲', current_point_sequence=NULL");
+            
+            // 恢复外键检查
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 1");
+            
+            log.info("清理完成");
+        } catch (Exception e) {
+            log.error("清理旧数据失败", e);
+        }
+    }
+
+    private void crawlMultiCityData() {
+        for (String targetCity : TARGET_CITIES) {
+            log.info("开始爬取城市: {}", targetCity);
+            // 临时修改实例变量
+            this.city = targetCity;
+            // 每个城市只爬取少量页面（例如1-2页），避免数据量过大且保证分布均匀
+            int originalMaxPages = this.maxPages;
+            this.maxPages = 5; // 增加页数以获取更多POI
+            
             getData();
+            
+            this.maxPages = originalMaxPages; // 恢复
         }
     }
 

@@ -44,6 +44,17 @@ public class Truck {
 
     private transient double distanceToTask; // 临时距离（不存入数据库）
 
+
+    private transient Integer taskId; // 临时任务ID（不存入数据库）
+
+    public Integer getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(Integer taskId) {
+        this.taskId = taskId;
+    }
+
     // 新增字段：当前行驶到的路径点顺序（从1开始）
     private Integer currentPointSequence;
 
@@ -221,6 +232,21 @@ public class Truck {
         this.location = location;
     }
 
+        public BigDecimal getLength() {
+        return length;
+    }
+
+    public void setLength(BigDecimal length) {
+        this.length = length;
+    }
+
+    public BigDecimal getWeight() {
+        return weight;
+    }
+
+    public void setWeight(BigDecimal weight) {
+        this.weight = weight;
+    }
 
 
 }

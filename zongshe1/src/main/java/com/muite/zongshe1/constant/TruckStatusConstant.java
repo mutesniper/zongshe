@@ -7,4 +7,5 @@ public class TruckStatusConstant {
     public static final String IN_TRANSIT = "运输中";
     public static final String UNLOADING = "卸货";
     public static final String MALFUNCTION = "故障";
+    public static final String TRAFFIC_JAM = "拥堵";
 }

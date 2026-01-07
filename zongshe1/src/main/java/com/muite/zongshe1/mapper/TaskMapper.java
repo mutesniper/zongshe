@@ -44,8 +44,23 @@ public interface TaskMapper {
      * 查询所有未分配车辆的任务（truck_id 为 null）
      * @return 未分配任务列表
      */
-    @Select("SELECT * FROM task WHERE truck_id =-1")
+     @Select("SELECT * FROM task WHERE truck_id IS NULL")
     List<Task> findByTruckIdIsNull();
+
+
+    /**
+     * 统计未完成的任务数量
+     * @return 数量
+     */
+    @Select("SELECT COUNT(*) FROM task WHERE status != '已完成'")
+    int countIncompleteTasks();
+
+    /**
+     * 根据ID查询任务
+     * @param id
+     * @return
+     */
+    Task selectByPrimaryKey(Integer id);
 
     /**
      * 更新任务的status

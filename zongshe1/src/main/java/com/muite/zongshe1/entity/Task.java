@@ -14,11 +14,47 @@ public class Task {
 
     private BigDecimal weight;
     private BigDecimal volume;
-
-
+    
+    // 关联客户信息
+    private Integer senderId;
+    private Integer receiverId;
+    private String senderName; // 冗余字段，方便查询
+    private String receiverName; // 冗余字段，方便查询
 
 
     public Task() {
+    }
+
+    public Integer getSenderId() {
+        return senderId;
+    }
+
+    public void setSenderId(Integer senderId) {
+        this.senderId = senderId;
+    }
+
+    public Integer getReceiverId() {
+        return receiverId;
+    }
+
+    public void setReceiverId(Integer receiverId) {
+        this.receiverId = receiverId;
+    }
+
+    public String getSenderName() {
+        return senderName;
+    }
+
+    public void setSenderName(String senderName) {
+        this.senderName = senderName;
+    }
+
+    public String getReceiverName() {
+        return receiverName;
+    }
+
+    public void setReceiverName(String receiverName) {
+        this.receiverName = receiverName;
     }
 
     public Task(Integer id, String start, String destination, Object goodsType, Integer truckId, Object status, BigDecimal weight, BigDecimal volume) {
