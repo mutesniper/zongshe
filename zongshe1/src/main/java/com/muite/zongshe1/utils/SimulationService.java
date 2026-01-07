@@ -279,11 +279,13 @@ public class SimulationService {
                         log.info("车辆 {} 装货完成，开始运输", truckId);
                     } else if (TruckStatusConstant.UNLOADING.equals(status)) {
                         // 卸货完成，任务结束
-                        Task task = taskMapper.selectByTruckId(truckId);
-                        if (task != null) {
+                        // 直接使用车辆当前的任务ID
+                        if (truck.getTaskId() != null) {
+                            Task task = new Task();
+                            task.setId(truck.getTaskId());
                             task.setStatus(TaskStatusConstant.COMPLETED);
                             taskMapper.updateStatus(task);
-                            log.info("任务{}已完成", task.getId());
+                            log.info("任务{}已完成", truck.getTaskId());
                         }
                         truck.setStatus(TruckStatusConstant.IDLE);
                         truck.setCurrentPointSequence(null);

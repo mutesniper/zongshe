@@ -24,7 +24,7 @@ public interface TaskMapper {
      * @param truckId
      * @return
      */
-    @Select("select * from task where truck_id=#{truckId}")
+    @Select("select * from task where truck_id=#{truckId} and status='运输中' limit 1")
     Task selectByTruckId(Integer truckId);
 
     /**
