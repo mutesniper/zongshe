@@ -27,6 +27,9 @@ const API_CONFIG = {
   baseUrl: "http://localhost:8080",
 };
 
+// 当前速度倍数（响应式变量）
+const currentSpeed = ref(30);
+
 // 初始化WebSocket连接
 function initWebSocket() {
   try {
@@ -192,6 +195,63 @@ async function controlSimulation(action) {
     }
   } catch (error) {
     console.error("控制仿真失败:", error);
+  }
+}
+
+// 调整仿真速度
+async function adjustSimulationSpeed(speed) {
+  try {
+    // 确保speed是数字类型
+    const speedValue = parseInt(speed);
+    if (isNaN(speedValue)) {
+      console.error("无效的速度值:", speed);
+      return;
+    }
+    
+    // 更新本地显示的速度
+    currentSpeed.value = speedValue;
+    
+    const url = `${API_CONFIG.baseUrl}/simulation/speed`;
+    const response = await fetch(url, { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speed: speedValue })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`仿真速度已调整为${speedValue}倍`);
+    } else {
+      console.error(`调整仿真速度失败，状态码: ${response.status}`);
+    }
+  } catch (error) {
+    console.error("调整仿真速度失败:", error);
+  }
+}
+
+// 生成随机任务
+async function generateRandomTasks() {
+  try {
+    const count = prompt("请输入生成任务数量（1-100）:", "10");
+    if (count === null) return; // 用户取消
+    
+    const num = parseInt(count);
+    if (isNaN(num) || num < 1 || num > 100) {
+      alert("请输入1-100之间的有效数字");
+      return;
+    }
+    
+    const response = await fetch(`${API_CONFIG.baseUrl}/generate/random?count=${num}`, {
+      method: 'GET',
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const result = await response.text();
+    alert(result);
+    console.log("生成随机任务成功:", result);
+  } catch (error) {
+    console.error("生成随机任务失败:", error);
+    alert("生成任务失败: " + error.message);
   }
 }
 
@@ -1018,6 +1078,32 @@ function focusVehicle(vehicle) {
           ⏸ 暂停
         </button>
       </div>
+      
+      <!-- 速度调节控件 -->
+      <div class="speed-control">
+        <label for="speed-slider">速度倍数:</label>
+        <input 
+          type="range" 
+          id="speed-slider" 
+          min="1" 
+          max="100" 
+          v-model.number="currentSpeed"
+          step="1"
+          @input="adjustSimulationSpeed(currentSpeed)"
+        >
+        <span id="speed-value">{{ currentSpeed }}</span>
+      </div>
+
+      <!-- 生成任务按钮 -->
+      <div class="generate-tasks">
+        <button 
+          class="load-routes-btn"
+          style="background-color: #8b5cf6; margin-top: 10px;"
+          @click="generateRandomTasks"
+        >
+          🎲 生成任务
+        </button>
+      </div>
     </div>
 
     <!-- 车辆信息侧边栏 -->
@@ -1096,6 +1182,95 @@ function focusVehicle(vehicle) {
 
 .connection-status.connected {
   color: #10b981;
+}
+
+.connection-status.error {
+  color: #ef4444;
+}
+
+.connection-status.disconnected {
+  color: #f59e0b;
+}
+
+.vehicle-count, .route-count {
+  margin: 5px 0;
+  font-weight: bold;
+}
+
+.load-routes-btn {
+  margin-top: 10px;
+  padding: 5px 10px;
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.load-routes-btn:hover {
+  background-color: #2563eb;
+}
+
+.control-group {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+}
+
+.control-btn {
+  padding: 5px 15px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-start {
+  background-color: #10b981;
+  color: white;
+}
+
+.btn-start:hover {
+  background-color: #059669;
+}
+
+.btn-pause {
+  background-color: #f59e0b;
+  color: white;
+}
+
+.btn-pause:hover {
+  background-color: #d97706;
+}
+
+.speed-control {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speed-control label {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.speed-control input[type="range"] {
+  flex: 1;
+  min-width: 150px;
+}
+
+.speed-control span {
+  font-size: 14px;
+  font-weight: bold;
+  color: #3b82f6;
 }
 
 .connection-status.disconnected {

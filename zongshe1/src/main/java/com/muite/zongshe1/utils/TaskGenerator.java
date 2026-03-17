@@ -60,15 +60,8 @@ public class TaskGenerator {
             throw new RuntimeException("POI数据不足2条，无法生成任务（需不同起点和终点）");
         }
 
-        // 查询所有发货方和收货方
-        List<com.muite.zongshe1.entity.Customer> senders = new ArrayList<>();
-        List<com.muite.zongshe1.entity.Customer> receivers = new ArrayList<>();
-        try {
-             senders = jdbcTemplate.query("SELECT * FROM customer WHERE type='发货方'", new org.springframework.jdbc.core.BeanPropertyRowMapper<>(com.muite.zongshe1.entity.Customer.class));
-             receivers = jdbcTemplate.query("SELECT * FROM customer WHERE type='收货方'", new org.springframework.jdbc.core.BeanPropertyRowMapper<>(com.muite.zongshe1.entity.Customer.class));
-        } catch (Exception e) {
-            log.warn("查询客户信息失败，将不绑定客户", e);
-        }
+        // 先生成一批额外的客户信息（100条）
+        generateExtraCustomers(100);
 
         List<Task> taskList = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -160,17 +153,41 @@ public class TaskGenerator {
             task.setWeight(weight); // 设置重量
             task.setVolume(volume); // 设置体积
             
-            // 随机分配发货人和收货人
-            if (!senders.isEmpty()) {
-                com.muite.zongshe1.entity.Customer sender = senders.get(random.nextInt(senders.size()));
-                task.setSenderId(sender.getId());
-                task.setSenderName(sender.getName());
-            }
-            if (!receivers.isEmpty()) {
-                com.muite.zongshe1.entity.Customer receiver = receivers.get(random.nextInt(receivers.size()));
-                task.setReceiverId(receiver.getId());
-                task.setReceiverName(receiver.getName());
-            }
+            // 生成随机发货方名称
+            String senderName = "发货方" + (i + 1);
+            String receiverName = "收货方" + (i + 1);
+            
+            // 生成随机手机号
+            String senderPhone = "138" + String.format("%08d", random.nextInt(100000000));
+            String receiverPhone = "139" + String.format("%08d", random.nextInt(100000000));
+            
+            // 生成随机联系人
+            String senderContact = "张" + random.nextInt(100);
+            String receiverContact = "李" + random.nextInt(100);
+            
+            // 生成随机地址
+            String senderAddress = "北京市朝阳区" + random.nextInt(100) + "号";
+            String receiverAddress = "北京市海淀区" + random.nextInt(100) + "号";
+            
+            // 插入发货方到customer表
+            jdbcTemplate.execute(String.format("INSERT INTO customer (name, address, contact_person, phone, type) VALUES ('%s', '%s', '%s', '%s', '%s')", 
+                senderName, senderAddress, senderContact, senderPhone, "发货方"));
+            
+            // 获取刚插入的发货方ID
+            Integer senderId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
+            
+            // 插入收货方到customer表
+            jdbcTemplate.execute(String.format("INSERT INTO customer (name, address, contact_person, phone, type) VALUES ('%s', '%s', '%s', '%s', '%s')", 
+                receiverName, receiverAddress, receiverContact, receiverPhone, "收货方"));
+            
+            // 获取刚插入的收货方ID
+            Integer receiverId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
+            
+            // 绑定客户信息到任务
+            task.setSenderId(senderId);
+            task.setSenderName(senderName);
+            task.setReceiverId(receiverId);
+            task.setReceiverName(receiverName);
 
             taskList.add(task);
         }
@@ -182,6 +199,39 @@ public class TaskGenerator {
         }
 
         return taskList;
+    }
+    
+    /**
+     * 生成额外的客户信息
+     * @param count 生成客户数量
+     */
+    private void generateExtraCustomers(int count) {
+        String[] lastNames = {"张", "李", "王", "赵", "刘", "陈", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡", "林", "郭", "何", "高", "罗", "郑", "梁", "谢", "宋", "唐", "许", "邓", "冯", "韩", "曹", "曾", "彭", "萧", "蔡", "潘", "田", "董", "袁", "于", "余", "叶", "蒋", "杜", "苏", "魏", "程", "吕", "丁", "沈", "任", "姚", "卢", "傅", "钟", "姜", "崔", "谭", "廖", "范", "汪", "陆", "金", "石", "戴", "贾", "韦", "夏", "邱", "方", "侯", "邹", "熊", "孟", "秦", "白", "江", "阎", "薛", "尹", "段", "雷", "黎", "史", "龙", "陶", "贺", "顾", "毛", "郝", "龚", "邵", "万", "钱", "严", "覃", "武", "戴", "莫", "孔", "向", "汤"};
+        String[] firstNames = {"伟", "芳", "强", "磊", "军", "勇", "艳", "杰", "涛", "明", "华", "丽", "敏", "静", "文", "辉", "刚", "英", "宇", "佳", "浩", "婷", "秀", "健", "超", "萍", "波", "荣", "春", "平", "燕", "峰", "霞", "亮", "雪", "强", "军", "宁", "玲", "锋", "莉", "彬", "琴", "伟", "红", "兵", "兰", "青", "梅", "松", "桂", "芝", "菊", "竹", "莲", "荷", "桃", "杏", "梨", "枣", "栗", "李", "杨", "柳", "榆", "槐", "梧桐", "枫", "柏", "松", "杉", "竹", "菊", "兰", "梅", "荷", "莲", "桂", "芝", "蓉", "薇", "菲", "芳", "芬", "芸", "芹", "萍", "菠", "萝", "茄", "椒", "葱", "姜", "蒜", "韭", "菜", "瓜", "果", "桃", "李", "杏", "梨", "枣", "栗", "梅", "兰", "竹", "菊", "荷", "莲", "桂", "芝", "蓉", "薇", "菲", "芳", "芬", "芸", "芹", "萍", "菠", "萝", "茄", "椒", "葱", "姜", "蒜", "韭", "菜", "瓜", "果"};
+        String[] addressPrefixes = {"北京市朝阳区", "北京市海淀区", "北京市西城区", "北京市东城区", "北京市丰台区", "北京市石景山区", "北京市通州区", "北京市顺义区", "北京市房山区", "北京市大兴区", "北京市昌平区", "北京市平谷区", "北京市怀柔区", "北京市密云区", "北京市延庆区"};
+        String[] types = {"发货方", "收货方", "中转商", "经销商", "零售商", "供应商"};
+        
+        for (int i = 0; i < count; i++) {
+            // 随机生成姓名
+            String lastName = lastNames[random.nextInt(lastNames.length)];
+            String firstName = firstNames[random.nextInt(firstNames.length)];
+            String name = lastName + firstName;
+            
+            // 随机生成手机号
+            String phone = "13" + (random.nextInt(8) + 5) + String.format("%08d", random.nextInt(100000000));
+            
+            // 随机生成地址
+            String address = addressPrefixes[random.nextInt(addressPrefixes.length)] + random.nextInt(1000) + "号";
+            
+            // 随机生成类型
+            String type = types[random.nextInt(types.length)];
+            
+            // 插入到customer表
+            jdbcTemplate.execute(String.format("INSERT INTO customer (name, address, contact_person, phone, type) VALUES ('%s', '%s', '%s', '%s', '%s')", 
+                name, address, name, phone, type));
+        }
+        
+        log.info("成功生成 {} 条额外客户信息", count);
     }
 
 

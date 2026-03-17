@@ -10,6 +10,7 @@ import com.muite.zongshe1.mapper.RouteMapper;
 import com.muite.zongshe1.mapper.TaskMapper;
 import com.muite.zongshe1.mapper.TaskRoutePointMapper;
 import com.muite.zongshe1.mapper.TruckMapper;
+import com.muite.zongshe1.mapper.AlertLogMapper;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,12 +40,17 @@ public class SimulationService {
 
     @Autowired
     private TaskRoutePointMapper taskRoutePointMapper; // 新增依赖
+    @Autowired
+    private AlertLogMapper alertLogMapper;
 
     // 存储车辆状态倒计时（Key: truckId, Value: 剩余周期数）
     private final Map<Integer, Integer> truckWaitCounters = new java.util.concurrent.ConcurrentHashMap<>();
 
     // 仿真运行状态控制
     private volatile boolean isSimulationRunning = true;
+    
+    // 仿真速度倍数（默认1倍）
+    private volatile int simulationSpeed = 1;
 
     public void startSimulation() {
         this.isSimulationRunning = true;
@@ -59,6 +65,15 @@ public class SimulationService {
     public boolean isSimulationRunning() {
         return isSimulationRunning;
     }
+    
+    public void setSimulationSpeed(int speed) {
+        this.simulationSpeed = speed;
+        log.info("仿真速度已调整为{}倍", speed);
+    }
+    
+    public int getSimulationSpeed() {
+        return simulationSpeed;
+    }
 
     private final Queue<Task> pendingTasks = new ConcurrentLinkedQueue<>();
 
@@ -68,26 +83,32 @@ public class SimulationService {
 
 
     // 定时任务：每隔 X 毫秒执行一次
-    // 加快任务分配频率：每1秒检查一次
-    @Scheduled(fixedRate = 1000)
-    public void syncUnassignedTasksFromDb() {
-        // 1. 查询数据库中 truck_id 为 null 的所有未分配任务
-        // 建议在SQL层面加LIMIT，或者这里做截断，防止一次性处理太多导致API超限
-        List<Task> unassignedTasks = taskMapper.findByTruckIdIsNull();
+        // 加快任务分配频率：每1秒检查一次
+        @Scheduled(fixedRate = 1000)
+        public void syncUnassignedTasksFromDb() {
+            // 1. 查询数据库中 truck_id 为 null 的所有未分配任务
+            // 建议在SQL层面加LIMIT，或者这里做截断，防止一次性处理太多导致API超限
+            List<Task> unassignedTasks = taskMapper.findByTruckIdIsNull();
 
-        // 2. 清空原有 pendingTasks（覆盖式核心步骤）
-        pendingTasks.clear();
+            // 2. 清空原有 pendingTasks（覆盖式核心步骤）
+            pendingTasks.clear();
 
-        // 3. 将新查询到的未分配任务批量存入队列（限制每次最多处理5个，避免高德API阻塞）
-        if (!unassignedTasks.isEmpty()) {
-            int limit = Math.min(unassignedTasks.size(), 5);
-            List<Task> batchTasks = unassignedTasks.subList(0, limit);
-            pendingTasks.addAll(batchTasks);
-            log.info("执行任务分配，当前积压: {}, 本次处理: {}", unassignedTasks.size(), batchTasks.size());
+            // 3. 将新查询到的未分配任务批量存入队列（限制每次最多处理5个，避免高德API阻塞）
+            if (!unassignedTasks.isEmpty()) {
+                int limit = Math.min(unassignedTasks.size(), 5);
+                List<Task> batchTasks = unassignedTasks.subList(0, limit);
+                pendingTasks.addAll(batchTasks);
+                log.info("执行任务分配，当前积压: {}, 本次处理: {}", unassignedTasks.size(), batchTasks.size());
 
-            //4. 执行任务分配
-            assignTasks();
-        }
+                //4. 执行任务分配
+                assignTasks();
+            } else {
+                // 没有未分配任务时，也检查一下是否有空闲车辆
+                List<Truck> idleTrucks = truckMapper.selectByStatus(TruckStatusConstant.IDLE);
+                if (!idleTrucks.isEmpty()) {
+                    log.info("当前有{}辆空闲车辆，等待新任务", idleTrucks.size());
+                }
+            }
 
 
     }
@@ -119,16 +140,18 @@ public class SimulationService {
 
             // 2. 筛选类型匹配的空闲车辆
             List<Truck> idleTrucks = truckMapper.selectByStatus(TruckStatusConstant.IDLE);
+            log.info("任务{}有{}辆空闲车辆，开始匹配", task.getId(), idleTrucks.size());
+            
             List<Truck> matchedTrucks = idleTrucks.stream()
                     .filter(truck -> isTruckMatchTask(truck, task))
                     .collect(Collectors.toList());
 
             if (matchedTrucks.isEmpty()) {
-                // 降低日志级别或频率，避免刷屏
-                // log.debug("任务{}暂时无法分配：没有匹配的空闲车辆", task.getId());
-                
+                log.warn("任务{}暂时无法分配：没有匹配的空闲车辆", task.getId());
                 pendingTasks.offer(task); // 放回队列等待下次尝试
                 continue;
+            } else {
+                log.info("任务{}匹配到{}辆空闲车辆", task.getId(), matchedTrucks.size());
             }
 
             // 3. 计算匹配车辆与任务起点的距离，并按距离排序
@@ -152,6 +175,8 @@ public class SimulationService {
 
             // 4. 分配给最近的车辆
             Truck nearestTruck = sortedTrucks.get(0);
+            log.info("任务{}分配给车辆{}，距离任务起点{}公里", task.getId(), nearestTruck.getId(), nearestTruck.getDistanceToTask());
+            
             // 初始状态设为装货，模拟装货过程（持续3个周期约15秒）
             nearestTruck.setStatus(TruckStatusConstant.LOADING);
             truckWaitCounters.put(nearestTruck.getId(), 3);
@@ -218,7 +243,13 @@ public class SimulationService {
         boolean volumeMatch = truck.getMaxVol().compareTo(task.getVolume()) >=0 ;
 
         // 3. 所有条件满足才匹配
-        return typeMatch && weightMatch && volumeMatch;
+        boolean match = typeMatch && weightMatch && volumeMatch;
+        if (!match) {
+            log.debug("车辆{}类型{}与任务{}货物类型{}不匹配，载重{} vs 重量{}，容积{} vs 体积{}", 
+                truck.getId(), truckType, task.getId(), goodsType, 
+                truck.getMaxWeight(), task.getWeight(), truck.getMaxVol(), task.getVolume());
+        }
+        return match;
     }
 
 
@@ -237,6 +268,7 @@ public class SimulationService {
     // 加快刷新频率：每0.5秒执行一次，使移动更流畅
     @Scheduled(fixedRate = 500)
     public void simulateMovement() {
+
         // 如果仿真暂停，则跳过本次执行
         if (!isSimulationRunning) {
             return;
@@ -247,7 +279,10 @@ public class SimulationService {
         
         log.info("开始执行车辆移动仿真，当前车辆总数：{}", trucks.size());
 
+        log.info("simulateStep开始: {}", System.currentTimeMillis());
+        Long startTime= System.currentTimeMillis();
         for (Truck truck : trucks) {
+
             String status = truck.getStatus().toString();
             Integer truckId = truck.getId();
             
@@ -255,6 +290,8 @@ public class SimulationService {
             Task currentTask = taskMapper.selectByTruckId(truckId);
             if (currentTask != null) {
                 truck.setTaskId(currentTask.getId());
+            } else {
+                truck.setTaskId(null); // 确保没有任务时taskId为null
             }
 
             // 启用日志以便调试
@@ -289,6 +326,7 @@ public class SimulationService {
                         }
                         truck.setStatus(TruckStatusConstant.IDLE);
                         truck.setCurrentPointSequence(null);
+                        truck.setTaskId(null); // 清除任务ID关联
                         truckMapper.updateByPrimaryKey(truck);
                         log.info("车辆 {} 卸货完成，恢复空闲", truckId);
                         continue;
@@ -325,6 +363,7 @@ public class SimulationService {
                      }
                      truck.setStatus(TruckStatusConstant.IDLE);
                      truck.setCurrentPointSequence(null);
+                     truck.setTaskId(null); // 清除任务ID关联
                      truckMapper.updateByPrimaryKey(truck);
                      continue;
                 }
@@ -337,6 +376,19 @@ public class SimulationService {
                     truckWaitCounters.put(truckId, 2); // 拥堵10秒
                     truckMapper.updateByPrimaryKey(truck);
                     log.info("车辆 {} 遭遇交通拥堵", truckId);
+                    
+                    // 记录拥堵告警到alert_log表
+                    AlertLog alertLog = new AlertLog();
+                    alertLog.setTruckId(truckId);
+                    alertLog.setTaskId(truck.getTaskId());
+                    alertLog.setType("拥堵");
+                    alertLog.setLevel("一般");
+                    alertLog.setLocation(truck.getLocation());
+                    alertLog.setCreateTime(new Date());
+                    alertLog.setIsHandled(false);
+                    alertLogMapper.insert(alertLog);
+                    log.info("车辆 {} 拥堵告警已记录到alert_log表", truckId);
+                    
                     continue;
                 }
 
@@ -364,10 +416,10 @@ public class SimulationService {
                 if (currentSequence == null) currentSequence = 1;
 
                 // 改进移动逻辑：基于实际距离计算步长，保证速度均匀
-                // 调整速度：为了演示效果，将仿真速度提升至约 1000km/h (3倍速)
                 // 时间间隔：0.5秒 (fixedRate=500)
-                // 目标移动距离：150米/0.5秒 (即 300米/秒 = 1080km/h)
-                double targetDistance = 150.0; 
+                // 基础移动距离：150米/0.5秒 (即 300米/秒 = 1080km/h)
+                // 根据仿真速度倍数动态调整
+                double targetDistance = 150.0 * simulationSpeed; 
                 
                 // 查找累积距离达到目标距离的点
                 int targetSequence = currentSequence;
@@ -448,7 +500,12 @@ public class SimulationService {
                  log.info("车辆 {} 空闲中，等待分配任务", truckId);
             }
 
+
         }
+        log.info("simulateStep结束: {}, 耗时: {}ms",
+                System.currentTimeMillis(),
+                System.currentTimeMillis() - startTime);
+
 
         // 推送更新后的车辆信息到前端
         broadcastTruckStatus(trucks);
@@ -520,8 +577,9 @@ public class SimulationService {
         // 3. 定义移动步长
         // 计算当前位置到终点的总距离（公里）
         double totalDistance = DistanceUtils.calculateDistance(currentLat, currentLon, destLat, destLon);
-        // 假设车辆速度为60公里/小时，定时任务每1秒执行一次
-        double step = calculateStep(60, 1, totalDistance);
+        // 基础速度：60公里/小时，定时任务每1秒执行一次
+        // 根据仿真速度倍数动态调整
+        double step = calculateStep(60 * simulationSpeed, 1, totalDistance);
 
         // 4. 计算下一个位置的经纬度（当前位置 + 步长*总差值）
         double nextLat = currentLat + latDiff * step;

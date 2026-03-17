@@ -50,4 +50,18 @@ public class SimulationController {
         result.put("message", "Successfully generated " + count + " vehicles");
         return result;
     }
+    
+    @PostMapping("/speed")
+    public Map<String, Object> adjustSimulationSpeed(@RequestBody Map<String, Integer> request) {
+        Integer speed = request.get("speed");
+        if (speed == null) {
+            speed = 1;
+        }
+        simulationService.setSimulationSpeed(speed);
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "success");
+        result.put("message", "Simulation speed adjusted to " + speed + "x");
+        result.put("speed", speed);
+        return result;
+    }
 }
