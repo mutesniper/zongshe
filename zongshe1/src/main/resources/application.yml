@@ -5,11 +5,14 @@ amap:
 
 poi:
   crawler:
-    auto-run: false        # 是否启动时自动爬取
-    keywords: "仓库"
-    city: "北京"
-    max-pages: 5
+    auto-run: true        # 开启自动爬取以触发多城市初始化
+    keywords: "仓库|物流园|工厂" # 扩展关键词
+    city: "北京" # 默认值，会被代码覆盖
+    max-pages: 2
 
+
+server:
+  port: 8081
 
 spring:
   datasource:
@@ -19,7 +22,6 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   application:
     name: zongshe1
-
 mybatis:
   mapper-locations: classpath:mapper/*.xml
   configuration:
