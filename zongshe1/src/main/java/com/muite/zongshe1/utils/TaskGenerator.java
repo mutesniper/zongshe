@@ -4,8 +4,10 @@ import com.muite.zongshe1.constant.GoodsTypeConstant;
 import com.muite.zongshe1.constant.PoiTypeConstant;
 import com.muite.zongshe1.entity.Point;
 import com.muite.zongshe1.entity.Task;
+import com.muite.zongshe1.entity.Goods;
 import com.muite.zongshe1.mapper.PointMapper;
 import com.muite.zongshe1.mapper.TaskMapper;
+import com.muite.zongshe1.service.GoodsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,10 +24,8 @@ import java.util.stream.Collectors;
 public class TaskGenerator {
     private static final Logger log = LoggerFactory.getLogger(TaskGenerator.class);
 
-    // 随机种子（确保每次生成结果可复现，也可去掉用系统时间）
     private final Random random = new Random(System.currentTimeMillis());
 
-    // 候选货物类型（可根据你的车辆分类调整）
     private static final List<String> GOODS_TYPES = List.of(
             GoodsTypeConstant.DANGEROUS_GOODS,
             GoodsTypeConstant.GENERAL_GOODS,
@@ -38,13 +38,13 @@ public class TaskGenerator {
 
     private final PointMapper pointMapper;
     private final TaskMapper taskMapper;
-    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate; // 注入JdbcTemplate查询客户
+    private final GoodsService goodsService;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
-
-    // 构造函数注入依赖
-    public TaskGenerator(PointMapper pointMapper, TaskMapper taskMapper, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
+    public TaskGenerator(PointMapper pointMapper, TaskMapper taskMapper, GoodsService goodsService, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
         this.pointMapper = pointMapper;
         this.taskMapper = taskMapper;
+        this.goodsService = goodsService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -148,42 +148,33 @@ public class TaskGenerator {
             task.setStart(startPoi.getLocation()); // 起点经纬度（复用POI的location字段）
             task.setDestination(endPoi.getLocation()); // 终点经纬度
             task.setGoodsType(goodsType);
-            task.setStatus("待分配"); // 任务初始状态
-            task.setTruckId(null); // 未分配车辆
-            task.setWeight(weight); // 设置重量
-            task.setVolume(volume); // 设置体积
+            task.setStatus("待分配");
+            task.setTruckId(null);
+            task.setWeight(weight);
+            task.setVolume(volume);
             
-            // 生成随机发货方名称
             String senderName = "发货方" + (i + 1);
             String receiverName = "收货方" + (i + 1);
             
-            // 生成随机手机号
             String senderPhone = "138" + String.format("%08d", random.nextInt(100000000));
             String receiverPhone = "139" + String.format("%08d", random.nextInt(100000000));
             
-            // 生成随机联系人
             String senderContact = "张" + random.nextInt(100);
             String receiverContact = "李" + random.nextInt(100);
             
-            // 生成随机地址
             String senderAddress = "北京市朝阳区" + random.nextInt(100) + "号";
             String receiverAddress = "北京市海淀区" + random.nextInt(100) + "号";
             
-            // 插入发货方到customer表
             jdbcTemplate.execute(String.format("INSERT INTO customer (name, address, contact_person, phone, type) VALUES ('%s', '%s', '%s', '%s', '%s')", 
                 senderName, senderAddress, senderContact, senderPhone, "发货方"));
             
-            // 获取刚插入的发货方ID
             Integer senderId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
             
-            // 插入收货方到customer表
             jdbcTemplate.execute(String.format("INSERT INTO customer (name, address, contact_person, phone, type) VALUES ('%s', '%s', '%s', '%s', '%s')", 
                 receiverName, receiverAddress, receiverContact, receiverPhone, "收货方"));
             
-            // 获取刚插入的收货方ID
             Integer receiverId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
             
-            // 绑定客户信息到任务
             task.setSenderId(senderId);
             task.setSenderName(senderName);
             task.setReceiverId(receiverId);
@@ -192,10 +183,36 @@ public class TaskGenerator {
             taskList.add(task);
         }
 
-        // 6. 批量保存到数据库
         if (!taskList.isEmpty()) {
-            taskMapper.batchInsert(taskList); // 需实现TaskMapper的批量插入方法
-            log.info("成功随机生成 {} 条任务", taskList.size());
+            for (Task task : taskList) {
+                taskMapper.insert(task);
+                
+                // 使用jdbcTemplate直接插入，确保能获取到自增ID
+                jdbcTemplate.update(
+                    "INSERT INTO goods (name, type, weight, volume, status, sender_id, receiver_id, origin_location, dest_location, task_id, priority, create_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "货物-" + task.getId(),
+                    task.getGoodsType(),
+                    task.getWeight(),
+                    task.getVolume(),
+                    "待分配",
+                    task.getSenderId(),
+                    task.getReceiverId(),
+                    task.getStart(),
+                    task.getDestination(),
+                    task.getId(),
+                    random.nextBoolean() ? "加急" : "常规",
+                    java.time.LocalDateTime.now()
+                );
+                
+                Integer goodsId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
+                
+                task.setGoodsId(goodsId);
+                jdbcTemplate.update("UPDATE task SET goods_id = ? WHERE id = ?", goodsId, task.getId());
+                
+                log.info("任务 {} 关联货物 {}", task.getId(), goodsId);
+            }
+            
+            log.info("成功随机生成 {} 条任务并关联货物", taskList.size());
         }
 
         return taskList;

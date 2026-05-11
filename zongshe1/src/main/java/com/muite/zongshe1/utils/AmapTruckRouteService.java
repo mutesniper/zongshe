@@ -39,21 +39,27 @@ public class AmapTruckRouteService {
      * @return 路径规划结果（封装为项目中的TruckRoute实体）
      */
     public TruckRoute getTruckRoute(String start, String destination, Truck truck) {
-        // todo 调整参数
-        // 1. 构建API请求参数（参考高德API文档）
+        // 1. 数据库中的位置已经是"经度,纬度"格式，直接使用
+        
+        if (!start.contains(",") || !destination.contains(",")) {
+            log.error("经纬度格式错误：start={}, destination={}", start, destination);
+            return new TruckRoute(null, null, null, false, "经纬度格式错误");
+        }
+        
+        // 2. 构建API请求参数（使用普通驾车路径规划API，货车API需要特殊权限）
         String url = String.format(
-                "https://restapi.amap.com/v3/direction/driving?key=%s&origin=%s&destination=%s&strategy=0",
+                "https://restapi.amap.com/v3/direction/driving?key=%s&origin=%s&destination=%s&strategy=0&extensions=all",
                 amapKey,
-                start,  // 注意：高德API中起点格式为"经度,纬度"，需与现有"纬度,经度"格式转换
+                start,  // 直接使用"经度,纬度"格式
                 destination
         );
 
         try {
             // 2. 调用API
-            log.info("调用高德货车路径规划API，URL：{}", url);
+            log.info("调用高德驾车路径规划API，URL：{}", url);
             String response = restTemplate.getForObject(url, String.class);
 
-            //log.info("高德API返回原始响应：{}", response);
+            log.info("高德API返回原始响应：{}", response);
             JsonNode root = objectMapper.readTree(response);
             if (root == null || !root.has("status")) {
                 return new TruckRoute(null, null, null, false, "API返回无status字段，响应：" + response);

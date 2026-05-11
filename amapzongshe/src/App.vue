@@ -2,6 +2,9 @@
 import { onMounted, ref, watchEffect, onUnmounted } from "vue";
 import AMapLoader from "@amap/amap-jsapi-loader";
 import { AMAP_CONFIG } from "./config";
+import VehicleVisualization from "./components/VehicleVisualization.vue";
+import GoodsVisualization from "./components/GoodsVisualization.vue";
+import CostVisualization from "./components/CostVisualization.vue";
 
 // 地图容器引用
 const mapContainer = ref(null);
@@ -15,6 +18,10 @@ let ws = null;
 const vehicles = ref([]);
 const vehicleMarkers = new Map(); // 车辆标记缓存
 const connectionStatus = ref("disconnected");
+
+// 车辆动画状态管理（时间驱动）
+const vehicleAnimations = new Map(); // 存储每辆车的动画状态
+let animationFrameId = null; // requestAnimationFrame ID
 
 // WebSocket配置
 const WS_CONFIG = {
@@ -50,70 +57,49 @@ function initWebSocket() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        // console.log("接收到车辆数据:", data);
         
-        // 区分批量数据(Array)和单条更新数据(Object)
-        if (Array.isArray(data)) {
-          // 批量更新：直接替换列表
+        // 处理事件驱动的消息
+        if (data.eventType) {
+          if (data.eventType === 'SPEED_CHANGED') {
+            // 处理速度变更事件：更新所有动画状态中的速度
+            handleSpeedChange(data);
+          } else {
+            handleTruckEvent(data);
+          }
+        } else if (Array.isArray(data)) {
+          // 批量初始化数据
           vehicles.value = data;
           updateVehicleMarkers();
-
-          // 如果车辆数据包含任务ID，自动加载对应路线，并清理已完成任务的路线
-          const activeTaskIds = new Set();
           
-          if (data.length > 0) {
-            data.forEach((vehicle) => {
-              if (vehicle.taskId) {
-                                activeTaskIds.add(vehicle.taskId);
-                // 只有当没有画过该路线时才去fetch，避免重复请求
-                if (!routePolylines.has(vehicle.taskId)) {
-                    fetchRouteData(vehicle.taskId).then((routeData) => {
-                      if (routeData) {
-                        drawRoute(routeData, vehicle.taskId);
-                      }
-                    });
-                }
+          const activeTaskIds = new Set();
+          data.forEach((vehicle) => {
+            if (vehicle.taskId) {
+              activeTaskIds.add(vehicle.taskId);
+              if (!routePolylines.has(vehicle.taskId)) {
+                fetchRouteData(vehicle.taskId).then((routeData) => {
+                  if (routeData) {
+                    drawRoute(routeData, vehicle.taskId);
+                  }
+                });
               }
-            });
-          }
-                    
-          // 清除不再活跃的路线（已完成的任务）
-          // 排除手动加载的测试路线（假设ID为2-11的是测试路线，或者根据实际业务逻辑调整）
-          // 这里简单处理：凡是当前车辆没有引用的路线，且之前是由车辆触发加载的，都清除
+            }
+          });
+          
           routePolylines.forEach((_, taskId) => {
-              // 注意：这里需要确保类型一致，vehicle.taskId通常是数字
-              if (!activeTaskIds.has(taskId)) {
-                  // 稍微延迟清除，以免状态切换瞬间闪烁，或者确认任务确实完成了
-                  // 这里直接清除，视觉上就是车没了，线也没了
-                  clearRoute(taskId);
-              }
+            if (!activeTaskIds.has(taskId)) {
+              clearRoute(taskId);
+            }
           });
         } else if (typeof data === 'object' && data !== null) {
-          // 单条更新：找到对应车辆并更新，避免清空列表导致闪烁
-          const updatedTruck = data;
-          const id = updatedTruck.id || updatedTruck.truckId;
+          // 兼容旧的单条更新格式
+          const id = data.id || data.truckId;
           if (id) {
-            // 查找现有车辆
             const index = vehicles.value.findIndex(v => (v.id || v.truckId) === id);
-            
             if (index !== -1) {
-              // 存在则更新属性
-              // 关键修复：确保新对象不仅包含旧属性，还必须用新数据覆盖旧数据
-              const oldVehicle = vehicles.value[index];
-              // 更新数据源
-              vehicles.value[index] = { ...oldVehicle, ...updatedTruck };
-              
-              // 立即对该车辆执行移动操作，不等待全量 updateVehicleMarkers
-              
-              const vehicle = vehicles.value[index];
-              // updateVehicleMarkers 已经处理了更新逻辑，这里不需要重复调用 moveTo
-              // 只需要触发 updateVehicleMarkers 即可
-              // 或者，为了性能，我们这里只更新这一个marker
-              updateSingleVehicleMarker(vehicle);
-
+              vehicles.value[index] = { ...vehicles.value[index], ...data };
+              updateSingleVehicleMarker(vehicles.value[index]);
             } else {
-              // 不存在则添加
-              vehicles.value.push(updatedTruck);
+              vehicles.value.push(data);
               updateVehicleMarkers();
             }
           }
@@ -174,6 +160,225 @@ function parseLocation(vehicle) {
     }
     if (!isNaN(lng) && !isNaN(lat)) return [lng, lat];
     return null;
+}
+
+// 处理后端推送的车辆事件（时间驱动核心逻辑）
+function handleTruckEvent(event) {
+  const { eventType, truckId, location, status, taskId, routePoints, totalDistance, startTime, simulationSpeed } = event;
+  
+  // 更新车辆列表
+  const index = vehicles.value.findIndex(v => (v.id || v.truckId) === truckId);
+  if (index !== -1) {
+    vehicles.value[index] = { 
+      ...vehicles.value[index], 
+      location, 
+      status, 
+      taskId,
+      simulationSpeed 
+    };
+  }
+  
+  switch (eventType) {
+    case 'TASK_ASSIGNED':
+    case 'DEPARTURE':
+      // 车辆出发：初始化动画状态
+      if (routePoints && routePoints.length > 0) {
+        const animState = {
+          truckId,
+          routePoints: routePoints.map(p => parseLocation({ location: p.pointLocation })),
+          totalDistance,
+          startTime,
+          simulationSpeed: simulationSpeed || 1,
+          currentSegmentIndex: 0,
+          isAnimating: true
+        };
+        vehicleAnimations.set(truckId, animState);
+        console.log(`车辆 ${truckId} 出发，开始动画，路径点数: ${routePoints.length}`);
+      }
+      break;
+      
+    case 'PICKUP_START':
+      // 车辆前往取货点：初始化动画状态
+      if (routePoints && routePoints.length > 0) {
+        const animState = {
+          truckId,
+          routePoints: routePoints.map(p => parseLocation({ location: p.pointLocation })),
+          totalDistance,
+          startTime,
+          simulationSpeed: simulationSpeed || 1,
+          currentSegmentIndex: 0,
+          isAnimating: true
+        };
+        vehicleAnimations.set(truckId, animState);
+        console.log(`车辆 ${truckId} 前往取货点，路径点数: ${routePoints.length}`);
+      }
+      break;
+      
+    case 'ARRIVED_PICKUP':
+      // 到达取货点：停止动画，等待装货
+      vehicleAnimations.delete(truckId);
+      updateSingleVehicleMarker(vehicles.value[index]);
+      console.log(`车辆 ${truckId} 已到达取货点，开始装货`);
+      break;
+      
+    case 'POSITION_UPDATE':
+      // 位置更新：后端计算的插值位置，前端直接显示
+      updateSingleVehicleMarker(vehicles.value[index]);
+      break;
+      
+    case 'ARRIVED':
+      // 到达终点：停止动画
+      vehicleAnimations.delete(truckId);
+      updateSingleVehicleMarker(vehicles.value[index]);
+      console.log(`车辆 ${truckId} 已到达`);
+      break;
+      
+    case 'TRAFFIC_JAM':
+    case 'WAITING':
+    case 'UNLOADING_START':
+    case 'JAM_CLEARED':
+      // 状态变化：更新标记显示
+      updateSingleVehicleMarker(vehicles.value[index]);
+      break;
+  }
+}
+
+// 处理速度变更事件
+function handleSpeedChange(event) {
+  const { oldSpeed, newSpeed } = event;
+  console.log(`收到速度变更事件: ${oldSpeed}x -> ${newSpeed}x`);
+  
+  // 更新所有正在动画的车辆的速度
+  vehicleAnimations.forEach((animState, truckId) => {
+    if (animState.isAnimating) {
+      // 计算当前已行驶的进度
+      const now = Date.now();
+      const elapsed = now - animState.startTime;
+      const oldSpeedMs = (600 * animState.simulationSpeed * 1000) / 3600;
+      const traveledDistance = oldSpeedMs * elapsed;
+      const progress = Math.min(traveledDistance / (animState.totalDistance * 1000), 1.0);
+      
+      if (progress < 1.0) {
+        // 关键修复：根据已行驶距离，倒推一个新的startTime
+        // 使得在新速度下，从新的startTime开始计算，车辆会处于相同的位置
+        const newSpeedMs = (600 * newSpeed * 1000) / 3600;
+        const timeNeededSeconds = traveledDistance / newSpeedMs;
+        const newStartTime = now - (timeNeededSeconds * 1000);
+        
+        // 更新动画状态
+        animState.startTime = newStartTime;
+        animState.simulationSpeed = newSpeed;
+        
+        console.log(`车辆 ${truckId} 动画速度更新: ${animState.simulationSpeed}x -> ${newSpeed}x, 已行驶 ${(progress * 100).toFixed(2)}%`);
+      }
+    }
+  });
+  
+  // 同时更新currentSpeed显示
+  currentSpeed.value = newSpeed;
+}
+
+// 启动全局动画循环（60fps平滑渲染）
+function startAnimationLoop() {
+  if (animationFrameId) return; // 防止重复启动
+  
+  function animate() {
+    const now = Date.now();
+    
+    // 遍历所有正在动画的车辆
+    vehicleAnimations.forEach((animState, truckId) => {
+      if (!animState.isAnimating) return;
+      
+      const elapsed = now - animState.startTime;
+      const speedMs = (600 * animState.simulationSpeed * 1000) / 3600; // 米/毫秒
+      const traveledDistance = speedMs * elapsed;
+      const progress = Math.min(traveledDistance / (animState.totalDistance * 1000), 1.0);
+      
+      // 计算插值位置
+      const interpolatedPos = interpolatePosition(animState.routePoints, progress, animState.totalDistance);
+      
+      if (interpolatedPos) {
+        // 更新车辆位置（不更新数据库，只更新前端显示）
+        const index = vehicles.value.findIndex(v => (v.id || v.truckId) === truckId);
+        if (index !== -1) {
+          const vehicle = vehicles.value[index];
+          vehicle.currentLat = interpolatedPos[1];
+          vehicle.currentLon = interpolatedPos[0];
+          
+          // 平滑更新标记位置
+          const marker = vehicleMarkers.get(truckId);
+          if (marker) {
+            marker.setPosition(interpolatedPos);
+          }
+        }
+      }
+      
+      // 到达终点
+      if (progress >= 1.0) {
+        animState.isAnimating = false;
+      }
+    });
+    
+    animationFrameId = requestAnimationFrame(animate);
+  }
+  
+  animate();
+}
+
+// 前端插值计算（基于距离）
+function interpolatePosition(routePoints, progress, totalDistance) {
+  if (!routePoints || routePoints.length < 2) return null;
+  if (progress <= 0) return routePoints[0];
+  if (progress >= 1) return routePoints[routePoints.length - 1];
+  
+  const targetDistance = totalDistance * progress;
+  let accumulatedDistance = 0;
+  
+  for (let i = 1; i < routePoints.length; i++) {
+    const p1 = routePoints[i - 1];
+    const p2 = routePoints[i];
+    
+    // 计算两点间距离（简化版，实际应该用Haversine公式）
+    const segmentDistance = calculateSegmentDistance(p1, p2);
+    
+    if (accumulatedDistance + segmentDistance >= targetDistance) {
+      const segmentProgress = (targetDistance - accumulatedDistance) / segmentDistance;
+      
+      // 线性插值
+      const lng = p1[0] + (p2[0] - p1[0]) * segmentProgress;
+      const lat = p1[1] + (p2[1] - p1[1]) * segmentProgress;
+      
+      return [lng, lat];
+    }
+    
+    accumulatedDistance += segmentDistance;
+  }
+  
+  return routePoints[routePoints.length - 1];
+}
+
+// 计算两点间距离（公里）
+function calculateSegmentDistance(p1, p2) {
+  const R = 6371; // 地球半径（公里）
+  const lat1 = p1[1] * Math.PI / 180;
+  const lat2 = p2[1] * Math.PI / 180;
+  const deltaLat = (p2[1] - p1[1]) * Math.PI / 180;
+  const deltaLon = (p2[0] - p1[0]) * Math.PI / 180;
+  
+  const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+            Math.cos(lat1) * Math.cos(lat2) *
+            Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  
+  return R * c;
+}
+
+// 停止动画循环
+function stopAnimationLoop() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
 }
 
 
@@ -435,6 +640,11 @@ const routeCount = ref(0); // 路线数量计数器
 
 // 地图类型切换状态
 const currentMapType = ref("standard"); // 'standard' 或 'satellite'
+
+// 可视化页面状态
+const showVisualization = ref(false);
+const showGoodsVisualization = ref(false);
+const showCostVisualization = ref(false);
 
 // 地图放大
 function zoomIn() {
@@ -891,6 +1101,9 @@ onMounted(() => {
 
           // 地图初始化成功后，建立WebSocket连接
           initWebSocket();
+          
+          // 启动动画循环（60fps平滑渲染）
+          startAnimationLoop();
 
           // 自动加载所有路线数据
           setTimeout(() => {
@@ -964,6 +1177,9 @@ window.clearAllRoutes = clearAllRoutes;
 
 // 组件卸载时清理资源
 onUnmounted(() => {
+  // 停止动画循环
+  stopAnimationLoop();
+  
   if (ws) {
     ws.close();
     ws = null;
@@ -981,6 +1197,9 @@ onUnmounted(() => {
     
   // 清除POI
   clearPois();
+  
+  // 清除动画状态
+  vehicleAnimations.clear();
 });
 
 // 格式化位置显示
@@ -1104,6 +1323,39 @@ function focusVehicle(vehicle) {
           🎲 生成任务
         </button>
       </div>
+      
+      <!-- 可视化按钮 -->
+      <div class="visualization-btn">
+        <button 
+          class="load-routes-btn"
+          style="background-color: #3b82f6; margin-top: 10px;"
+          @click="showVisualization = true"
+        >
+          📊 车辆分析
+        </button>
+      </div>
+      
+      <!-- 货物分析按钮 -->
+      <div class="goods-visualization-btn">
+        <button 
+          class="load-routes-btn"
+          style="background-color: #10b981; margin-top: 10px;"
+          @click="showGoodsVisualization = true"
+        >
+          📦 货物分析
+        </button>
+      </div>
+      
+      <!-- 成本分析按钮 -->
+      <div class="cost-visualization-btn">
+        <button 
+          class="load-routes-btn"
+          style="background-color: #f59e0b; margin-top: 10px;"
+          @click="showCostVisualization = true"
+        >
+          💰 成本分析
+        </button>
+      </div>
     </div>
 
     <!-- 车辆信息侧边栏 -->
@@ -1142,6 +1394,45 @@ function focusVehicle(vehicle) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 车辆分析可视化模态窗口 -->
+  <div v-if="showVisualization" class="visualization-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>车辆分析可视化</h2>
+        <button class="close-btn" @click="showVisualization = false">×</button>
+      </div>
+      <div class="modal-body">
+        <VehicleVisualization />
+      </div>
+    </div>
+  </div>
+  
+  <!-- 货物分析可视化模态窗口 -->
+  <div v-if="showGoodsVisualization" class="visualization-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>货物分析可视化</h2>
+        <button class="close-btn" @click="showGoodsVisualization = false">×</button>
+      </div>
+      <div class="modal-body">
+        <GoodsVisualization />
+      </div>
+    </div>
+  </div>
+  
+  <!-- 成本分析可视化模态窗口 -->
+  <div v-if="showCostVisualization" class="visualization-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>成本分析可视化</h2>
+        <button class="close-btn" @click="showCostVisualization = false">×</button>
+      </div>
+      <div class="modal-body">
+        <CostVisualization />
       </div>
     </div>
   </div>
@@ -1487,5 +1778,81 @@ body {
 #app {
   width: 100%;
   height: 100%;
+}
+
+/* 可视化模态窗口 */
+.visualization-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  width: 90%;
+  max-width: 1400px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f8f9fa;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+}
+
+.modal-header .close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.modal-header .close-btn:hover {
+  background: #e9ecef;
+  color: #333;
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+@media (max-width: 768px) {
+  .modal-content {
+    width: 95%;
+    height: 95vh;
+    max-height: 95vh;
+  }
 }
 </style>

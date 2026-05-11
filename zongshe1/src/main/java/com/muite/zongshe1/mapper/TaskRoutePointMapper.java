@@ -17,6 +17,9 @@ public interface TaskRoutePointMapper {
     // 根据任务ID删除路径点
     void deleteByTaskId(Integer taskId);
 
+    // 删除已完成任务的路径点
+    void deleteCompletedTaskRoutePoints();
+
     @Select("select * from task_route_point")
     List<TaskRoutePoint> selectAll();
 }

@@ -55,7 +55,7 @@ public class DatabaseInitializer implements CommandLineRunner {
             jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS alert_log (" +
                     "id INT AUTO_INCREMENT PRIMARY KEY," +
                     "truck_id INT," +
-                    "driver_id INT," + // 新增：driver_id
+                    "driver_id INT," +
                     "task_id INT," +
                     "type VARCHAR(20)," +
                     "level VARCHAR(10)," +
@@ -64,25 +64,269 @@ public class DatabaseInitializer implements CommandLineRunner {
                     "is_handled BOOLEAN" +
                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
             
+            // 5. 创建或修改 goods 表
+            try {
+                jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS goods (" +
+                        "id INT AUTO_INCREMENT PRIMARY KEY," +
+                        "name VARCHAR(100) DEFAULT NULL," +
+                        "type VARCHAR(50) DEFAULT NULL," +
+                        "weight DECIMAL(10,2) DEFAULT NULL," +
+                        "volume DECIMAL(10,2) DEFAULT NULL," +
+                        "value DECIMAL(10,2) DEFAULT NULL," +
+                        "status VARCHAR(20) DEFAULT '待分配'," +
+                        "priority VARCHAR(20) DEFAULT NULL," +
+                        "sender_id INT DEFAULT NULL," +
+                        "receiver_id INT DEFAULT NULL," +
+                        "origin_location VARCHAR(100) DEFAULT NULL," +
+                        "dest_location VARCHAR(100) DEFAULT NULL," +
+                        "distance DECIMAL(10,2) DEFAULT NULL," +
+                        "task_id INT DEFAULT NULL," +
+                        "create_time DATETIME DEFAULT NULL," +
+                        "assign_time DATETIME DEFAULT NULL," +
+                        "load_time DATETIME DEFAULT NULL," +
+                        "deliver_time DATETIME DEFAULT NULL," +
+                        "complete_time DATETIME DEFAULT NULL," +
+                        "location VARCHAR(100) DEFAULT NULL" +
+                        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            } catch (Exception e) { }
+            
+            // 添加缺失的列（如果表已存在）
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN name VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN type VARCHAR(50) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN weight DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN volume DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN value DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN status VARCHAR(20) DEFAULT '待分配'");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN priority VARCHAR(20) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN sender_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN receiver_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN origin_location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN dest_location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN distance DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN task_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN create_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN assign_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN load_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN deliver_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN complete_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods ADD COLUMN location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN name VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods CHANGE COLUMN goods_type type VARCHAR(50) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN type VARCHAR(50) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN weight DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN volume DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN value DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN status VARCHAR(20) DEFAULT '待分配'");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN priority VARCHAR(20) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN sender_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN receiver_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN origin_location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN dest_location VARCHAR(100) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN distance DECIMAL(10,2) DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN task_id INT DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN create_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN assign_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN load_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN deliver_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE goods MODIFY COLUMN complete_time DATETIME DEFAULT NULL");
+            } catch (Exception e) { }
+            log.info("已检查并更新 goods 表结构");
+            
+            // 6. 创建 goods_demand 表（货物需求记录）
+            jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS goods_demand (" +
+                    "id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "goods_id INT," +
+                    "demand_type VARCHAR(20)," +
+                    "demand_time DATETIME," +
+                    "region VARCHAR(50)," +
+                    "urgency VARCHAR(20)," +
+                    "status VARCHAR(20)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            // 7. 创建 goods_transport 表（货物运输记录）
+            jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS goods_transport (" +
+                    "id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "goods_id INT," +
+                    "task_id INT," +
+                    "truck_id INT," +
+                    "transport_type VARCHAR(20)," +
+                    "start_time DATETIME," +
+                    "end_time DATETIME," +
+                    "actual_distance DECIMAL(10,2)," +
+                    "transport_region VARCHAR(50)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            // 8. 创建 goods_waiting 表（货物等待记录）
+            jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS goods_waiting (" +
+                    "id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "goods_id INT," +
+                    "waiting_type VARCHAR(20)," +
+                    "start_time DATETIME," +
+                    "end_time DATETIME," +
+                    "waiting_reason VARCHAR(100)," +
+                    "waiting_location VARCHAR(100)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            // 9. 创建 goods_loss 表（货物损耗记录）
+            jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS goods_loss (" +
+                    "id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "goods_id INT," +
+                    "loss_type VARCHAR(20)," +
+                    "loss_weight DECIMAL(10,2)," +
+                    "loss_value DECIMAL(10,2)," +
+                    "loss_time DATETIME," +
+                    "factory_id INT" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            // 10. 创建索引优化查询性能
+            try {
+                jdbcTemplate.execute("CREATE INDEX idx_goods_create_time ON goods(create_time)");
+                jdbcTemplate.execute("CREATE INDEX idx_goods_type ON goods(type)");
+                jdbcTemplate.execute("CREATE INDEX idx_goods_status ON goods(status)");
+                jdbcTemplate.execute("CREATE INDEX idx_goods_sender ON goods(sender_id)");
+                jdbcTemplate.execute("CREATE INDEX idx_goods_receiver ON goods(receiver_id)");
+                log.info("已创建货物表索引");
+            } catch (Exception e) {
+                // 忽略已存在索引的错误
+            }
+            
             // 尝试添加新列（如果表已存在）
             try {
                 jdbcTemplate.execute("ALTER TABLE task ADD COLUMN sender_id INT");
+            } catch (Exception e) { }
+            try {
                 jdbcTemplate.execute("ALTER TABLE task ADD COLUMN receiver_id INT");
+            } catch (Exception e) { }
+            try {
                 jdbcTemplate.execute("ALTER TABLE task ADD COLUMN sender_name VARCHAR(100)");
+            } catch (Exception e) { }
+            try {
                 jdbcTemplate.execute("ALTER TABLE task ADD COLUMN receiver_name VARCHAR(100)");
-            } catch (Exception e) {
-                // 忽略已存在列的错误
-            }
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE task ADD COLUMN goods_id INT");
+                log.info("已添加 task.goods_id 列");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE task ADD COLUMN weight DECIMAL(10,2)");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE task ADD COLUMN volume DECIMAL(10,2)");
+            } catch (Exception e) { }
+            try {
+                jdbcTemplate.execute("ALTER TABLE task ADD COLUMN status VARCHAR(20)");
+            } catch (Exception e) { }
+            log.info("已检查 task 表结构");
             try {
                 jdbcTemplate.execute("ALTER TABLE alert_log ADD COLUMN driver_id INT");
             } catch (Exception e) {
                 // 忽略
             }
+            
+            // 扩展 truck 表 status 列长度以支持中文状态
+            try {
+                jdbcTemplate.execute("ALTER TABLE truck MODIFY COLUMN status VARCHAR(50)");
+                log.info("已扩展 truck.status 列长度");
+            } catch (Exception e) {
+                // 忽略
+            }
+            
+            // 添加 current_point_sequence 字段用于保存车辆进度
+            try {
+                jdbcTemplate.execute("ALTER TABLE truck ADD COLUMN current_point_sequence INT");
+                log.info("已添加 truck.current_point_sequence 列");
+            } catch (Exception e) {
+                // 忽略已存在错误
+            }
 
             log.info("数据库表结构初始化完成");
 
-            // 5. 初始化模拟数据（如果表为空）
-            initMockData();
+            // 只在表为空时初始化模拟数据
+            Integer goodsCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM goods", Integer.class);
+            if (goodsCount == null || goodsCount == 0) {
+                log.info("goods表为空，初始化模拟数据...");
+                initMockData();
+            } else {
+                log.info("goods表已有 {} 条数据，跳过初始化", goodsCount);
+            }
             
             // 6. 修复可能存在的经纬度格式错误 (lat,lng -> lng,lat)
             fixLocationData();

@@ -11,10 +11,12 @@ import com.muite.zongshe1.mapper.TaskMapper;
 import com.muite.zongshe1.mapper.TaskRoutePointMapper;
 import com.muite.zongshe1.mapper.TruckMapper;
 import com.muite.zongshe1.mapper.AlertLogMapper;
+import com.muite.zongshe1.service.GoodsService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +24,7 @@ import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
+import java.util.Stack;
 
 @Service
 public class SimulationService {
@@ -39,14 +42,36 @@ public class SimulationService {
     AmapTruckRouteService amapTruckRouteService;
 
     @Autowired
-    private TaskRoutePointMapper taskRoutePointMapper; // 新增依赖
+    private TaskRoutePointMapper taskRoutePointMapper;
     @Autowired
     private AlertLogMapper alertLogMapper;
+    
+    @Autowired
+    private RouteSimplifier routeSimplifier;
+    
+    @Autowired
+    private GoodsService goodsService;
+    
+    @Autowired
+    @Lazy
+    private OptimizationService optimizationService;
 
-    // 存储车辆状态倒计时（Key: truckId, Value: 剩余周期数）
-    private final Map<Integer, Integer> truckWaitCounters = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Integer, Integer> truckWaitCounters = new java.util.concurrent.ConcurrentHashMap();
 
-    // 仿真运行状态控制
+    // 获取车辆等待计数器
+    public Map<Integer, Integer> getTruckWaitCounters() {
+        return truckWaitCounters;
+    }
+
+    // 获取车辆总里程
+    public Map<Integer, Double> getTruckTotalDistance() {
+        return truckTotalDistance;
+    }
+
+    private final Random random = new Random();
+
+    private final Map<Integer, Long> lastLossCheckTime = new HashMap<>();
+
     private volatile boolean isSimulationRunning = true;
     
     // 仿真速度倍数（默认1倍）
@@ -67,12 +92,166 @@ public class SimulationService {
     }
     
     public void setSimulationSpeed(int speed) {
-        this.simulationSpeed = speed;
-        log.info("仿真速度已调整为{}倍", speed);
+        int oldSpeed = this.simulationSpeed;
+        
+        if (oldSpeed != speed) {
+            // 先更新速度，再同步车辆（resyncAllMovingTrucks需要使用新速度计算）
+            this.simulationSpeed = speed;
+            resyncAllMovingTrucks(oldSpeed, speed);
+            
+            // 广播速度变更事件给所有前端
+            broadcastSpeedChangeEvent(oldSpeed, speed);
+            
+            log.info("仿真速度已调整为{}倍", speed);
+        }
+    }
+    
+    private void broadcastSpeedChangeEvent(int oldSpeed, int newSpeed) {
+        try {
+            Map<String, Object> message = new HashMap<>();
+            message.put("eventType", "SPEED_CHANGED");
+            message.put("oldSpeed", oldSpeed);
+            message.put("newSpeed", newSpeed);
+            message.put("timestamp", System.currentTimeMillis());
+            
+            VehicleSimulationSocket.broadcast(new ObjectMapper().writeValueAsString(message));
+            log.info("广播速度变更事件: {}x -> {}x", oldSpeed, newSpeed);
+        } catch (Exception e) {
+            log.error("广播速度变更事件失败", e);
+        }
+    }
+    
+    private void resyncAllMovingTrucks(int oldSpeed, int newSpeed) {
+        long currentTime = System.currentTimeMillis();
+        
+        for (Map.Entry<Integer, Long> entry : truckMovementStartTime.entrySet()) {
+            Integer truckId = entry.getKey();
+            Long startTime = entry.getValue();
+            Double totalDistance = truckTotalDistance.get(truckId);
+            List<TaskRoutePoint> routePoints = truckRouteCache.get(truckId);
+            
+            if (startTime != null && totalDistance != null && routePoints != null && totalDistance > 0) {
+                long elapsed = currentTime - startTime;
+                double speedKmh = 600.0 * oldSpeed;
+                double speedMs = speedKmh * 1000 / 3600;
+                double traveledDistance = speedMs * (elapsed / 1000.0);
+                double progress = Math.min(traveledDistance / (totalDistance * 1000), 1.0);
+                
+                if (progress < 1.0) {
+                    String currentLocation = interpolatePosition(routePoints, progress);
+                    
+                    // 关键修复：根据已行驶的进度，倒推一个新的startTime
+                    // 使得在新速度下，从新的startTime开始计算，车辆会处于相同的位置
+                    double newSpeedKmh = 600.0 * newSpeed;
+                    double newSpeedMs = newSpeedKmh * 1000 / 3600;
+                    // 已行驶距离 / 新速度 = 需要的时间（秒）
+                    double timeNeededSeconds = traveledDistance / newSpeedMs;
+                    // 新的startTime = 当前时间 - 需要的时间
+                    long newStartTime = currentTime - (long)(timeNeededSeconds * 1000);
+                    
+                    truckMovementStartTime.put(truckId, newStartTime);
+                    
+                    Truck truck = truckMapper.selectByPrimaryKey(truckId.longValue());
+                    if (truck != null) {
+                        truck.setLocation(currentLocation);
+                        truckMapper.updateByPrimaryKey(truck);
+                        
+                        log.info("车辆 {} 速度从{}x调整到{}x，已行驶{:.2f}%，重新锚定位置: {}", 
+                            truckId, oldSpeed, newSpeed, progress * 100, currentLocation);
+                    }
+                }
+            }
+        }
     }
     
     public int getSimulationSpeed() {
         return simulationSpeed;
+    }
+
+    // 服务启动时恢复车辆进度
+    @PostConstruct
+    public void restoreTruckProgress() {
+        log.info("开始恢复车辆进度...");
+        
+        List<Truck> trucks = truckMapper.selectAll();
+        for (Truck truck : trucks) {
+            Integer truckId = truck.getId();
+            Integer currentSequence = truck.getCurrentPointSequence();
+            
+            // 只恢复有进度记录且正在运输或取货的车辆
+            if (currentSequence != null && currentSequence != 0) {
+                Task task = taskMapper.selectByTruckId(truckId);
+                if (task == null) {
+                    continue;
+                }
+                
+                String status = truck.getStatus().toString();
+                
+                if (TruckStatusConstant.IN_TRANSIT.equals(status)) {
+                    // 恢复运输状态
+                    List<TaskRoutePoint> routePoints = taskRoutePointMapper.selectByTaskId(task.getId());
+                    if (!routePoints.isEmpty()) {
+                        routePoints.sort(Comparator.comparingInt(TaskRoutePoint::getSequence));
+                        
+                        // 根据保存的进度计算新的startTime
+                        int savedIndex = Math.min(currentSequence, routePoints.size() - 1);
+                        double progress = (double) savedIndex / routePoints.size();
+                        
+                        truckRouteCache.put(truckId, routePoints);
+                        truckTotalDistance.put(truckId, calculateTotalRouteDistance(routePoints));
+                        
+                        // 倒推startTime，使车辆从保存的位置继续
+                        double totalDist = truckTotalDistance.get(truckId);
+                        double traveledDistance = progress * totalDist * 1000; // 米
+                        double speedMs = 600.0 * simulationSpeed * 1000 / 3600;
+                        long timeNeededMs = (long) (traveledDistance / speedMs * 1000);
+                        long newStartTime = System.currentTimeMillis() - timeNeededMs;
+                        
+                        truckMovementStartTime.put(truckId, newStartTime);
+                        
+                        // 更新车辆位置
+                        String location = interpolatePosition(routePoints, progress);
+                        truck.setLocation(location);
+                        truckMapper.updateByPrimaryKey(truck);
+                        
+                        log.info("车辆 {} 运输进度已恢复，当前位置: {}，进度: {:.2f}%", 
+                            truckId, location, progress * 100);
+                    }
+                } else if (TruckStatusConstant.PICKUP.equals(status)) {
+                    // 恢复取货状态
+                    List<TaskRoutePoint> routePoints = taskRoutePointMapper.selectByTaskId(task.getId()).stream()
+                            .filter(p -> p.getSequence() < 0)
+                            .sorted(Comparator.comparingInt(TaskRoutePoint::getSequence))
+                            .collect(Collectors.toList());
+                    
+                    if (!routePoints.isEmpty()) {
+                        // 取货路径使用负数索引
+                        int savedIndex = Math.min(-currentSequence, routePoints.size() - 1);
+                        double progress = (double) savedIndex / routePoints.size();
+                        
+                        truckRouteCache.put(truckId, routePoints);
+                        truckTotalDistance.put(truckId, calculateTotalRouteDistance(routePoints));
+                        
+                        double totalDist = truckTotalDistance.get(truckId);
+                        double traveledDistance = progress * totalDist * 1000;
+                        double speedMs = 600.0 * simulationSpeed * 1000 / 3600;
+                        long timeNeededMs = (long) (traveledDistance / speedMs * 1000);
+                        long newStartTime = System.currentTimeMillis() - timeNeededMs;
+                        
+                        truckMovementStartTime.put(truckId, newStartTime);
+                        
+                        String location = interpolatePosition(routePoints, progress);
+                        truck.setLocation(location);
+                        truckMapper.updateByPrimaryKey(truck);
+                        
+                        log.info("车辆 {} 取货进度已恢复，当前位置: {}，进度: {:.2f}%", 
+                            truckId, location, progress * 100);
+                    }
+                }
+            }
+        }
+        
+        log.info("车辆进度恢复完成，共恢复 {} 辆车", truckMovementStartTime.size());
     }
 
     private final Queue<Task> pendingTasks = new ConcurrentLinkedQueue<>();
@@ -125,129 +304,296 @@ public class SimulationService {
 
 
     /**
-     * 向类型匹配且距离最近的车分配任务
+     * 判断任务是否为蝇头小利（货少里程长）
+     * 价值密度 = 货物重量 / 运输里程（公斤/公里）
+     * 如果价值密度低于阈值，则认为是蝇头小利
+     */
+    private boolean isNotWorthwhile(Task task) {
+        // 获取任务重量
+        double weight = 0;
+        if (task.getWeight() != null) {
+            weight = task.getWeight().doubleValue();
+            log.debug("任务{} weight对象: {}, double值: {}", task.getId(), task.getWeight(), weight);
+        } else {
+            log.debug("任务{} weight字段为null", task.getId());
+        }
+        
+        // 计算运输里程（从起点到终点的距离）
+        String start = task.getStart();
+        String destination = task.getDestination();
+        double distance = 0;
+        if (start != null && destination != null && !start.equals(destination)) {
+            double startLat = DistanceUtils.parseLatitude(start);
+            double startLon = DistanceUtils.parseLongitude(start);
+            double destLat = DistanceUtils.parseLatitude(destination);
+            double destLon = DistanceUtils.parseLongitude(destination);
+            distance = DistanceUtils.calculateDistance(startLat, startLon, destLat, destLon);
+        }
+        
+        // 如果距离为0，不算蝇头小利
+        if (distance <= 0) {
+            return false;
+        }
+        
+        // 重量单位是吨，转换为公斤
+        double weightInKg = weight * 1000;
+        
+        // 计算重量密度（公斤/公里）
+        double weightDensity = weightInKg / distance;
+        
+        // 设置阈值：每公里至少运输0.5公斤才值得（可配置）
+        double threshold = 0.5;
+        
+        boolean notWorthwhile = weightDensity < threshold;
+        if (notWorthwhile) {
+            log.info("任务{}被判定为蝇头小利：重量={}吨(={}kg), 里程={}km, 密度={}kg/km（阈值={}kg/km）", 
+                task.getId(), weight, weightInKg, distance, String.format("%.2f", weightDensity), threshold);
+        }
+        
+        return notWorthwhile;
+    }
+
+    /**
+     * 一车多货任务分配方法
+     * 实现逻辑：
+     * 1. 过滤蝇头小利任务
+     * 2. 为每个车辆分配多个任务（基于剩余容量）
+     * 3. 实现先装后卸的装载顺序（使用栈结构）
      */
     public void assignTasks() {
         // 使用临时列表避免死循环
         List<Task> tasksToProcess = new ArrayList<>(pendingTasks);
         pendingTasks.clear(); // 清空队列，未匹配的会重新加入
 
-        for (Task task : tasksToProcess) {
-            // 1. 解析任务起点的经纬度（从task.start字段提取）
-            String taskStartStr = task.getStart(); // 格式："纬度,经度"
-            double taskStartLat = DistanceUtils.parseLatitude(taskStartStr);
-            double taskStartLon = DistanceUtils.parseLongitude(taskStartStr);
+        // 1. 过滤蝇头小利任务
+        List<Task> worthwhileTasks = tasksToProcess.stream()
+                .filter(task -> !isNotWorthwhile(task))
+                .collect(Collectors.toList());
+        
+        List<Task> rejectedTasks = tasksToProcess.stream()
+                .filter(this::isNotWorthwhile)
+                .collect(Collectors.toList());
+        
+        log.info("本轮任务分配：总数={}, 值得运输={}, 蝇头小利={}", 
+            tasksToProcess.size(), worthwhileTasks.size(), rejectedTasks.size());
 
-            // 2. 筛选类型匹配的空闲车辆
-            List<Truck> idleTrucks = truckMapper.selectByStatus(TruckStatusConstant.IDLE);
-            log.info("任务{}有{}辆空闲车辆，开始匹配", task.getId(), idleTrucks.size());
+        // 2. 获取所有空闲车辆
+        List<Truck> idleTrucks = truckMapper.selectByStatus(TruckStatusConstant.IDLE);
+        log.info("可用空闲车辆数: {}", idleTrucks.size());
+
+        // 3. 为每个车辆分配多个任务
+        for (Truck truck : idleTrucks) {
+            // 装载栈：用于实现先装后卸
+            Stack<Task> loadStack = new Stack<>();
+            List<Task> assignedTasks = new ArrayList<>();
             
-            List<Truck> matchedTrucks = idleTrucks.stream()
-                    .filter(truck -> isTruckMatchTask(truck, task))
-                    .collect(Collectors.toList());
+            // 记录已使用的任务索引，避免重复分配
+            Set<Integer> assignedTaskIds = new HashSet<>();
 
-            if (matchedTrucks.isEmpty()) {
-                log.warn("任务{}暂时无法分配：没有匹配的空闲车辆", task.getId());
-                pendingTasks.offer(task); // 放回队列等待下次尝试
-                continue;
-            } else {
-                log.info("任务{}匹配到{}辆空闲车辆", task.getId(), matchedTrucks.size());
+            // 遍历任务，尝试装载
+            for (Task task : worthwhileTasks) {
+                // 跳过已分配的任务
+                if (assignedTaskIds.contains(task.getId())) {
+                    continue;
+                }
+
+                // 检查类型匹配
+                if (!isTruckMatchTask(truck, task)) {
+                    continue;
+                }
+
+                // 使用 Truck 实体的 canLoad 方法检查容量是否足够
+                BigDecimal taskWeight = task.getWeight() != null ? task.getWeight() : BigDecimal.ZERO;
+                BigDecimal taskVolume = task.getVolume() != null ? task.getVolume() : BigDecimal.ZERO;
+                
+                if (truck.canLoad(taskWeight, taskVolume)) {
+                    // 装载任务
+                    loadStack.push(task);
+                    assignedTasks.add(task);
+                    assignedTaskIds.add(task.getId());
+                    
+                    // 使用 Truck 实体的 load 方法更新装载状态
+                    truck.load(taskWeight, taskVolume);
+                    
+                    log.info("车辆{}装载任务{}，剩余载重={:.2f}kg，剩余容积={:.2f}", 
+                        truck.getId(), task.getId(), 
+                        truck.getRemainingWeight(), truck.getRemainingVolume());
+                }
             }
 
-            // 3. 计算匹配车辆与任务起点的距离，并按距离排序
-            List<Truck> sortedTrucks = matchedTrucks.stream()
-                    .map(truck -> {
-                        // 解析车辆位置的经纬度（从truck.location字段提取）
-                        String truckLocStr = truck.getLocation(); // 格式："纬度,经度"
-                        double truckLat = DistanceUtils.parseLatitude(truckLocStr);
-                        double truckLon = DistanceUtils.parseLongitude(truckLocStr);
+            // 如果该车辆成功装载了任务
+            if (!assignedTasks.isEmpty()) {
+                log.info("车辆{}共装载{}个任务", truck.getId(), assignedTasks.size());
+                
+                // 将任务ID添加到车辆的任务栈中
+                for (Task task : loadStack) {
+                    truck.getTaskStack().push(task.getId());
+                }
+                
+                // 处理装载的任务：按先装后卸顺序规划路线
+                processMultiTaskAssignment(truck, loadStack, assignedTasks);
+            }
+        }
 
-                        // 计算距离
-                        double distance = DistanceUtils.calculateDistance(
-                                truckLat, truckLon,
-                                taskStartLat, taskStartLon
-                        );
-                        truck.setDistanceToTask(distance); // 临时存储距离用于排序
-                        return truck;
-                    })
-                    .sorted(Comparator.comparingDouble(Truck::getDistanceToTask)) // 按距离升序
-                    .collect(Collectors.toList());
-
-            // 4. 分配给最近的车辆
-            Truck nearestTruck = sortedTrucks.get(0);
-            log.info("任务{}分配给车辆{}，距离任务起点{}公里", task.getId(), nearestTruck.getId(), nearestTruck.getDistanceToTask());
-            
-            // 初始状态设为装货，模拟装货过程（持续3个周期约15秒）
-            nearestTruck.setStatus(TruckStatusConstant.LOADING);
-            truckWaitCounters.put(nearestTruck.getId(), 3);
-            truckMapper.updateByPrimaryKey(nearestTruck);
-
-            // 5. 规划路线并保存到任务中（新增逻辑）
-            Route route = getOptimalRoute(task.getStart(), task.getDestination(), nearestTruck);
-            if (route == null) {
-                // 路线规划失败，任务放回队列
-                log.warn("任务{}路线规划失败，放回队列", task.getId());
+        // 4. 处理未分配的任务（放回队列）
+        for (Task task : worthwhileTasks) {
+            if (!task.getStatus().equals(TaskStatusConstant.IN_TRANSIT) && task.getTruckId() == null) {
                 pendingTasks.offer(task);
-                // 恢复车辆状态为空闲
-                nearestTruck.setStatus(TruckStatusConstant.IDLE);
-                truckMapper.updateByPrimaryKey(nearestTruck);
-                continue;
             }
-            // 获取路径点列表（假设返回List<Point>）
-            List<Point> routePoints = amapTruckRouteService.getTruckRoute(
-                    task.getStart(), task.getDestination(), nearestTruck).getPathPoints();
-
-            // 转换为TaskRoutePoint并批量插入关联表
-            List<TaskRoutePoint> points = new ArrayList<>();
-            for (int i = 0; i < routePoints.size(); i++) {
-                Point p = routePoints.get(i);
-                points.add(new TaskRoutePoint(
-                        task.getId(), // 关联当前任务ID
-                        p.getLocation(),
-                        p.getName(),
-                        i + 1 // 顺序从1开始
-                ));
-            }
-            taskRoutePointMapper.batchInsert(points); // 保存到关联表
-
-            task.setTruckId(nearestTruck.getId());
-            task.setStatus(TaskStatusConstant.IN_TRANSIT);
-            taskMapper.updateTaskTruckId(task);
-            taskMapper.updateStatus(task);
-            
-            log.info("任务{}已分配给车辆{}", task.getId(), nearestTruck.getId());
         }
         
-        // 如果有未分配的任务，打印一条汇总日志而不是每条都打印
+        // 5. 蝇头小利任务也放回队列（可能后续有更合适的车辆）
+        for (Task task : rejectedTasks) {
+            pendingTasks.offer(task);
+        }
+        
+        // 如果有未分配的任务，打印一条汇总日志
         if (!pendingTasks.isEmpty()) {
             log.info("本轮分配结束，剩余{}个任务等待分配车辆", pendingTasks.size());
         }
     }
 
-    // 检验车辆与任务是否匹配
+    /**
+     * 处理多任务分配：规划路线并更新状态
+     */
+    private void processMultiTaskAssignment(Truck truck, Stack<Task> loadStack, List<Task> assignedTasks) {
+        // 获取车辆当前位置
+        String truckLocation = truck.getLocation();
+        
+        // 构建完整路线：取货路线 -> 运输路线（按先装后卸顺序）
+        List<TaskRoutePoint> allRoutePoints = new ArrayList<>();
+        int sequenceCounter = 0;
+
+        // 1. 规划取货路线（按装载顺序）
+        String currentLocation = truckLocation;
+        List<Task> loadingOrder = new ArrayList<>(loadStack); // 装载顺序（栈底到栈顶）
+        
+        for (int i = 0; i < loadingOrder.size(); i++) {
+            Task task = loadingOrder.get(i);
+            String taskStart = task.getStart();
+            
+            if (!currentLocation.equals(taskStart)) {
+                // 规划从当前位置到任务起点的路线
+                TruckRoute pickupRoute = amapTruckRouteService.getTruckRoute(currentLocation, taskStart, truck);
+                if (pickupRoute != null && pickupRoute.isSuccess()) {
+                    for (Point p : pickupRoute.getPathPoints()) {
+                        allRoutePoints.add(new TaskRoutePoint(
+                                task.getId(),
+                                p.getLocation(),
+                                "取货-" + task.getId() + "-" + (i + 1),
+                                sequenceCounter++
+                        ));
+                    }
+                    currentLocation = taskStart;
+                }
+            }
+            
+            // 记录取货点
+            allRoutePoints.add(new TaskRoutePoint(
+                    task.getId(),
+                    taskStart,
+                    "取货完成-" + task.getId(),
+                    sequenceCounter++
+            ));
+        }
+
+        // 2. 规划运输路线（按先装后卸顺序，即栈顶到栈底）
+        Stack<Task> unloadStack = (Stack<Task>) loadStack.clone();
+        while (!unloadStack.isEmpty()) {
+            Task task = unloadStack.pop();
+            String taskDestination = task.getDestination();
+            
+            if (!currentLocation.equals(taskDestination)) {
+                TruckRoute deliveryRoute = amapTruckRouteService.getTruckRoute(currentLocation, taskDestination, truck);
+                if (deliveryRoute != null && deliveryRoute.isSuccess()) {
+                    for (Point p : deliveryRoute.getPathPoints()) {
+                        allRoutePoints.add(new TaskRoutePoint(
+                                task.getId(),
+                                p.getLocation(),
+                                "运输-" + task.getId(),
+                                sequenceCounter++
+                        ));
+                    }
+                    currentLocation = taskDestination;
+                }
+            }
+            
+            // 记录卸货点
+            allRoutePoints.add(new TaskRoutePoint(
+                    task.getId(),
+                    taskDestination,
+                    "卸货完成-" + task.getId(),
+                    sequenceCounter++
+            ));
+            
+            // 更新任务状态
+            task.setTruckId(truck.getId());
+            task.setStatus(TaskStatusConstant.IN_TRANSIT);
+            taskMapper.updateTaskTruckId(task);
+            taskMapper.updateStatus(task);
+            
+            if (task.getGoodsId() != null) {
+                try {
+                    goodsService.assignGoodsToTask(task.getGoodsId(), task.getId(), truck.getId());
+                } catch (Exception e) {
+                    log.error("货物分配记录失败: {}", e.getMessage());
+                }
+            }
+        }
+
+        // 3. 批量保存路径点
+        if (!allRoutePoints.isEmpty()) {
+            taskRoutePointMapper.batchInsert(allRoutePoints);
+        }
+
+        // 4. 更新车辆状态
+        truck.setStatus(TruckStatusConstant.PICKUP);
+        truckMapper.updateByPrimaryKey(truck);
+
+        // 5. 初始化车辆移动状态
+        truckRouteCache.put(truck.getId(), allRoutePoints);
+        truckMovementStartTime.put(truck.getId(), System.currentTimeMillis());
+        truckTotalDistance.put(truck.getId(), calculateTotalRouteDistance(allRoutePoints));
+
+        // 6. 推送事件给前端
+        broadcastTruckEvent(truck, "MULTI_TASK_ASSIGNED", allRoutePoints);
+        log.info("车辆{}多任务分配完成，共{}个任务，路径点{}个", 
+            truck.getId(), assignedTasks.size(), allRoutePoints.size());
+    }
+
+    // 检验车辆与任务是否匹配（支持一车多货）
     private boolean isTruckMatchTask(Truck truck, Task task) {
         String truckType = truck.getType().toString();
         String goodsType = task.getGoodsType().toString();
-        boolean typeMatch=( (truckType.equals(TruckTypeConstant.REFRIGERATED_TRUCK) && goodsType.equals(GoodsTypeConstant.PERISHABLE_GOODS)) ||
+        
+        // 1. 类型匹配检查
+        boolean typeMatch = (truckType.equals(TruckTypeConstant.REFRIGERATED_TRUCK) && goodsType.equals(GoodsTypeConstant.PERISHABLE_GOODS)) ||
                 (truckType.equals(TruckTypeConstant.DANGEROUS_GOODS_TRUCK) && goodsType.equals(GoodsTypeConstant.DANGEROUS_GOODS)) ||
-                (truckType.equals(TruckTypeConstant.PALLET_TRUCK) && (goodsType.equals(GoodsTypeConstant.GENERAL_GOODS) || goodsType.equals(GoodsTypeConstant.BULK_HEAVY_GOODS)))||
-                (truckType.equals(TruckTypeConstant.VAN) && goodsType.equals(GoodsTypeConstant.GENERAL_GOODS))||
-                (truckType.equals(TruckTypeConstant.WAREHOUSE_TRUCK) && goodsType.equals(GoodsTypeConstant.GOODS_REQUIREING_VENTILATION))||
-                (truckType.equals(TruckTypeConstant.TANK_TRUCK) && goodsType.equals(GoodsTypeConstant.LIQUID_POWDERS))||
-                (truckType.equals(TruckTypeConstant.DUMP_TRUCK) && goodsType.equals(GoodsTypeConstant.BULK_HEAVY_GOODS))||
-                (truckType.equals(TruckTypeConstant.CONTAINER_TRUCK) && (goodsType.equals(GoodsTypeConstant.BULK_GOODS) || goodsType.equals(GoodsTypeConstant.GENERAL_GOODS)))||
-                truckType.equals(TruckTypeConstant.VAN) ); // 厢式车默认匹配多数货物
+                (truckType.equals(TruckTypeConstant.PALLET_TRUCK) && (goodsType.equals(GoodsTypeConstant.GENERAL_GOODS) || goodsType.equals(GoodsTypeConstant.BULK_HEAVY_GOODS) || goodsType.equals(GoodsTypeConstant.BULK_GOODS))) ||
+                (truckType.equals(TruckTypeConstant.VAN) && (goodsType.equals(GoodsTypeConstant.GENERAL_GOODS) || goodsType.equals(GoodsTypeConstant.GOODS_REQUIREING_VENTILATION) || goodsType.equals(GoodsTypeConstant.BULK_GOODS) || goodsType.equals(GoodsTypeConstant.PERISHABLE_GOODS))) ||
+                (truckType.equals(TruckTypeConstant.WAREHOUSE_TRUCK) && (goodsType.equals(GoodsTypeConstant.GOODS_REQUIREING_VENTILATION) || goodsType.equals(GoodsTypeConstant.GENERAL_GOODS))) ||
+                (truckType.equals(TruckTypeConstant.TANK_TRUCK) && goodsType.equals(GoodsTypeConstant.LIQUID_POWDERS)) ||
+                (truckType.equals(TruckTypeConstant.DUMP_TRUCK) && (goodsType.equals(GoodsTypeConstant.BULK_HEAVY_GOODS) || goodsType.equals(GoodsTypeConstant.BULK_GOODS))) ||
+                (truckType.equals(TruckTypeConstant.CONTAINER_TRUCK) && (goodsType.equals(GoodsTypeConstant.BULK_GOODS) || goodsType.equals(GoodsTypeConstant.GENERAL_GOODS) || goodsType.equals(GoodsTypeConstant.BULK_HEAVY_GOODS) || goodsType.equals(GoodsTypeConstant.PERISHABLE_GOODS)));
 
-        // 2. 重量和体积匹配（车辆载重≥货物重量，车辆容积≥货物体积）
-        boolean weightMatch = truck.getMaxWeight().compareTo(task.getWeight()) >= 0;
-        boolean volumeMatch = truck.getMaxVol().compareTo(task.getVolume()) >=0 ;
+        // 2. 重量和体积匹配（一车多货场景：检查剩余容量是否足够）
+        BigDecimal taskWeight = task.getWeight() != null ? task.getWeight() : BigDecimal.ZERO;
+        BigDecimal taskVolume = task.getVolume() != null ? task.getVolume() : BigDecimal.ZERO;
+        
+        // 首先检查单个任务是否超过车辆最大容量（防止单个任务超重/超体积）
+        boolean singleTaskWeightMatch = truck.getMaxWeight().compareTo(taskWeight) >= 0;
+        boolean singleTaskVolumeMatch = truck.getMaxVol().compareTo(taskVolume) >= 0;
+        
+        // 然后检查车辆剩余容量是否足够装载此任务
+        boolean weightMatch = singleTaskWeightMatch && truck.canLoad(taskWeight, BigDecimal.ZERO);
+        boolean volumeMatch = singleTaskVolumeMatch && truck.canLoad(BigDecimal.ZERO, taskVolume);
 
         // 3. 所有条件满足才匹配
         boolean match = typeMatch && weightMatch && volumeMatch;
         if (!match) {
-            log.debug("车辆{}类型{}与任务{}货物类型{}不匹配，载重{} vs 重量{}，容积{} vs 体积{}", 
+            log.debug("车辆{}类型{}与任务{}货物类型{}不匹配，剩余载重{} vs 重量{}，剩余容积{} vs 体积{}", 
                 truck.getId(), truckType, task.getId(), goodsType, 
-                truck.getMaxWeight(), task.getWeight(), truck.getMaxVol(), task.getVolume());
+                truck.getRemainingWeight(), taskWeight, truck.getRemainingVolume(), taskVolume);
         }
         return match;
     }
@@ -264,12 +610,12 @@ public class SimulationService {
 
 
 
-    // 每5秒更新一次车辆位置（仿真移动）
-    // 加快刷新频率：每0.5秒执行一次，使移动更流畅
-    @Scheduled(fixedRate = 500)
-    public void simulateMovement() {
+    private final Map<Integer, Long> truckMovementStartTime = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Integer, Double> truckTotalDistance = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Integer, List<TaskRoutePoint>> truckRouteCache = new java.util.concurrent.ConcurrentHashMap<>();
 
-        // 如果仿真暂停，则跳过本次执行
+    @Scheduled(fixedRate = 1000)
+    public void simulateMovement() {
         if (!isSimulationRunning) {
             return;
         }
@@ -277,107 +623,171 @@ public class SimulationService {
         List<Truck> trucks = truckMapper.selectAll();
         Random random = new Random();
         
-        log.info("开始执行车辆移动仿真，当前车辆总数：{}", trucks.size());
+        log.debug("开始执行车辆移动仿真，当前车辆总数：{}", trucks.size());
 
-        log.info("simulateStep开始: {}", System.currentTimeMillis());
-        Long startTime= System.currentTimeMillis();
         for (Truck truck : trucks) {
-
             String status = truck.getStatus().toString();
             Integer truckId = truck.getId();
             
-            // 每次循环都查询当前车辆关联的任务ID，确保前端能获取到
             Task currentTask = taskMapper.selectByTruckId(truckId);
             if (currentTask != null) {
                 truck.setTaskId(currentTask.getId());
             } else {
-                truck.setTaskId(null); // 确保没有任务时taskId为null
+                truck.setTaskId(null);
             }
 
-            // 启用日志以便调试
-            log.info("车辆 {} 状态: {}, 倒计时: {}", truckId, status, truckWaitCounters.get(truckId));
-
-            // 1. 处理需等待的状态（装货、卸货、拥堵）
             if (truckWaitCounters.containsKey(truckId)) {
                 int remaining = truckWaitCounters.get(truckId);
                 remaining--;
-                log.info("车辆 {} 等待中，剩余周期: {}", truckId, remaining);
                 
                 if (remaining > 0) {
                     truckWaitCounters.put(truckId, remaining);
-                    // 状态不变，只更新计数器
+                    broadcastTruckEvent(truck, "WAITING", null);
                 } else {
                     truckWaitCounters.remove(truckId);
-                    // 等待结束，状态流转
+                    
                     if (TruckStatusConstant.LOADING.equals(status)) {
                         truck.setStatus(TruckStatusConstant.IN_TRANSIT);
                         truckMapper.updateByPrimaryKey(truck);
-                        status = TruckStatusConstant.IN_TRANSIT; // 更新当前局部变量状态
-                        log.info("车辆 {} 装货完成，开始运输", truckId);
+                        
+                        if (currentTask != null && currentTask.getGoodsId() != null) {
+                            try {
+                                goodsService.loadGoods(currentTask.getGoodsId());
+                            } catch (Exception e) {
+                                log.error("货物装载记录失败: {}", e.getMessage());
+                            }
+                        }
+                        
+                        List<TaskRoutePoint> routePoints = taskRoutePointMapper.selectByTaskId(truck.getTaskId());
+                        if (!routePoints.isEmpty()) {
+                            routePoints.sort(Comparator.comparingInt(TaskRoutePoint::getSequence));
+                            truckRouteCache.put(truckId, routePoints);
+                            truckMovementStartTime.put(truckId, System.currentTimeMillis());
+                            truckTotalDistance.put(truckId, calculateTotalRouteDistance(routePoints));
+                            
+                            truck.setLocation(routePoints.get(0).getPointLocation());
+                            truckMapper.updateByPrimaryKey(truck);
+                            
+                            broadcastTruckEvent(truck, "DEPARTURE", routePoints);
+                            log.info("车辆 {} 装货完成，开始运输", truckId);
+                        } else {
+                            log.warn("车辆 {} 装货完成但无路径点，跳过运输", truckId);
+                        }
                     } else if (TruckStatusConstant.UNLOADING.equals(status)) {
-                        // 卸货完成，任务结束
-                        // 直接使用车辆当前的任务ID
                         if (truck.getTaskId() != null) {
                             Task task = new Task();
                             task.setId(truck.getTaskId());
                             task.setStatus(TaskStatusConstant.COMPLETED);
                             taskMapper.updateStatus(task);
                             log.info("任务{}已完成", truck.getTaskId());
+                            
+                            // 删除已完成任务的路径点
+                            try {
+                                taskRoutePointMapper.deleteByTaskId(truck.getTaskId());
+                                log.info("已删除任务{}的路径点数据", truck.getTaskId());
+                            } catch (Exception e) {
+                                log.error("删除任务路径点失败: {}", e.getMessage());
+                            }
+                            
+                            if (currentTask != null && currentTask.getGoodsId() != null) {
+                                try {
+                                    goodsService.deliverGoods(currentTask.getGoodsId());
+                                    goodsService.completeGoods(currentTask.getGoodsId());
+                                } catch (Exception e) {
+                                    log.error("货物送达记录失败: {}", e.getMessage());
+                                }
+                            }
+                            
+                            // 从车辆任务栈中移除已完成的任务
+                            truck.completeCurrentTask();
+                            
+                            // 如果还有更多任务，继续处理下一个
+                            if (truck.hasMoreTasks()) {
+                                Integer nextTaskId = truck.peekNextTask();
+                                Task nextTask = taskMapper.selectByPrimaryKey(nextTaskId);
+                                if (nextTask != null) {
+                                    // 更新车辆当前任务
+                                    truck.setTaskId(nextTaskId);
+                                    
+                                    // 卸载当前货物重量和体积
+                                    if (currentTask != null) {
+                                        BigDecimal taskWeight = currentTask.getWeight() != null ? currentTask.getWeight() : BigDecimal.ZERO;
+                                        BigDecimal taskVolume = currentTask.getVolume() != null ? currentTask.getVolume() : BigDecimal.ZERO;
+                                        truck.unload(taskWeight, taskVolume);
+                                    }
+                                    
+                                    log.info("车辆{}继续处理下一个任务{}，任务栈剩余{}个任务", 
+                                        truckId, nextTaskId, truck.getTaskStack().size());
+                                }
+                            }
                         }
-                        truck.setStatus(TruckStatusConstant.IDLE);
-                        truck.setCurrentPointSequence(null);
-                        truck.setTaskId(null); // 清除任务ID关联
-                        truckMapper.updateByPrimaryKey(truck);
-                        log.info("车辆 {} 卸货完成，恢复空闲", truckId);
+                        
+                        // 检查是否还有更多任务
+                        if (truck.hasMoreTasks()) {
+                            // 还有任务，继续运输
+                            // 重新获取路线点（可能需要重新规划）
+                            List<TaskRoutePoint> remainingRoutePoints = truckRouteCache.get(truckId);
+                            if (remainingRoutePoints != null && !remainingRoutePoints.isEmpty()) {
+                                // 继续使用当前路线
+                                truck.setStatus(TruckStatusConstant.IN_TRANSIT);
+                                truckMapper.updateByPrimaryKey(truck);
+                                log.info("车辆{}继续运输，剩余{}个任务", truckId, truck.getTaskStack().size());
+                            } else {
+                                // 路线点已用完，需要重新规划
+                                truck.setStatus(TruckStatusConstant.IDLE);
+                                truckMapper.updateByPrimaryKey(truck);
+                                log.warn("车辆{}任务栈非空但无路线点，重置为空闲状态", truckId);
+                            }
+                        } else {
+                            // 没有更多任务，恢复空闲
+                            truck.setStatus(TruckStatusConstant.IDLE);
+                            truck.setCurrentPointSequence(null);
+                            truck.setTaskId(null);
+                            truckMapper.updateByPrimaryKey(truck);
+                            
+                            truckRouteCache.remove(truckId);
+                            truckMovementStartTime.remove(truckId);
+                            truckTotalDistance.remove(truckId);
+                            
+                            broadcastTruckEvent(truck, "ARRIVED", null);
+                            log.info("车辆 {} 所有任务完成，恢复空闲", truckId);
+                        }
                         continue;
                     } else if (TruckStatusConstant.TRAFFIC_JAM.equals(status)) {
                         truck.setStatus(TruckStatusConstant.IN_TRANSIT);
                         truckMapper.updateByPrimaryKey(truck);
-                        status = TruckStatusConstant.IN_TRANSIT;
+                        broadcastTruckEvent(truck, "JAM_CLEARED", null);
                         log.info("车辆 {} 拥堵结束，恢复运输", truckId);
                     }
                 }
-                // 无论是继续等待还是状态切换，本周期都不移动
-                // 但需要推送到前端，让前端知道还在装/卸/堵
                 continue;
             } else {
-                // 异常状态恢复机制：如果车辆状态是需要等待的（拥堵/装卸货），但没有倒计时器（可能是服务重启导致丢失）
-                // 则自动恢复为正常状态或直接完成当前动作
                 if (TruckStatusConstant.TRAFFIC_JAM.equals(status)) {
-                    log.warn("车辆 {} 处于拥堵状态但无倒计时，自动恢复运输", truckId);
                     truck.setStatus(TruckStatusConstant.IN_TRANSIT);
                     truckMapper.updateByPrimaryKey(truck);
-                    status = TruckStatusConstant.IN_TRANSIT;
                 } else if (TruckStatusConstant.LOADING.equals(status)) {
-                     log.warn("车辆 {} 处于装货状态但无倒计时，自动开始运输", truckId);
-                     truck.setStatus(TruckStatusConstant.IN_TRANSIT);
-                     truckMapper.updateByPrimaryKey(truck);
-                     status = TruckStatusConstant.IN_TRANSIT;
+                    truck.setStatus(TruckStatusConstant.IN_TRANSIT);
+                    truckMapper.updateByPrimaryKey(truck);
                 } else if (TruckStatusConstant.UNLOADING.equals(status)) {
-                     log.warn("车辆 {} 处于卸货状态但无倒计时，自动完成卸货", truckId);
-                     // 卸货完成逻辑
-                     Task task = taskMapper.selectByTruckId(truckId);
-                     if (task != null) {
-                         task.setStatus(TaskStatusConstant.COMPLETED);
-                         taskMapper.updateStatus(task);
-                     }
-                     truck.setStatus(TruckStatusConstant.IDLE);
-                     truck.setCurrentPointSequence(null);
-                     truck.setTaskId(null); // 清除任务ID关联
-                     truckMapper.updateByPrimaryKey(truck);
-                     continue;
+                    Task task = taskMapper.selectByTruckId(truckId);
+                    if (task != null) {
+                        task.setStatus(TaskStatusConstant.COMPLETED);
+                        taskMapper.updateStatus(task);
+                    }
+                    truck.setStatus(TruckStatusConstant.IDLE);
+                    truck.setCurrentPointSequence(null);
+                    truck.setTaskId(null);
+                    truckMapper.updateByPrimaryKey(truck);
+                    continue;
                 }
             }
 
             if (TruckStatusConstant.IN_TRANSIT.equals(status)) {
-                // 模拟交通拥堵（降低概率到2%）
                 if (random.nextDouble() < 0.02) {
                     truck.setStatus(TruckStatusConstant.TRAFFIC_JAM);
-                    truckWaitCounters.put(truckId, 2); // 拥堵10秒
+                    truckWaitCounters.put(truckId, 2);
                     truckMapper.updateByPrimaryKey(truck);
-                    log.info("车辆 {} 遭遇交通拥堵", truckId);
                     
-                    // 记录拥堵告警到alert_log表
                     AlertLog alertLog = new AlertLog();
                     alertLog.setTruckId(truckId);
                     alertLog.setTaskId(truck.getTaskId());
@@ -387,12 +797,12 @@ public class SimulationService {
                     alertLog.setCreateTime(new Date());
                     alertLog.setIsHandled(false);
                     alertLogMapper.insert(alertLog);
-                    log.info("车辆 {} 拥堵告警已记录到alert_log表", truckId);
                     
+                    broadcastTruckEvent(truck, "TRAFFIC_JAM", null);
+                    log.info("车辆 {} 遭遇交通拥堵", truckId);
                     continue;
                 }
 
-                // 获取车辆当前任务
                 Task task = taskMapper.selectByTruckId(truck.getId());
                 if (task == null) {
                     truck.setStatus(TruckStatusConstant.IDLE);
@@ -401,115 +811,207 @@ public class SimulationService {
                     continue;
                 }
 
-                // 从关联表查询路径点（按顺序）
-                List<TaskRoutePoint> routePoints = taskRoutePointMapper.selectByTaskId(task.getId());
-                // 处理路线点为空或索引异常的情况
-                if (routePoints.isEmpty()) {
-                    handleEmptyRoutePoints(task, truck);
+                List<TaskRoutePoint> routePoints = truckRouteCache.get(truckId);
+                if (routePoints == null) {
+                    routePoints = taskRoutePointMapper.selectByTaskId(task.getId());
+                    if (routePoints.isEmpty()) {
+                        handleEmptyRoutePoints(task, truck);
+                        continue;
+                    }
+                    routePoints.sort(Comparator.comparingInt(TaskRoutePoint::getSequence));
+                    truckRouteCache.put(truckId, routePoints);
+                    truckMovementStartTime.put(truckId, System.currentTimeMillis());
+                    truckTotalDistance.put(truckId, calculateTotalRouteDistance(routePoints));
+                }
+
+                Long startTime = truckMovementStartTime.get(truckId);
+                Double totalDist = truckTotalDistance.get(truckId);
+                
+                if (startTime != null && totalDist != null && totalDist > 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    double speedKmh = 600.0 * simulationSpeed;
+                    double speedMs = speedKmh * 1000 / 3600;
+                    double traveledDistance = speedMs * (elapsed / 1000.0);
+                    
+                    double progress = Math.min(traveledDistance / (totalDist * 1000), 1.0);
+                    
+                    if (progress >= 1.0) {
+                        TaskRoutePoint lastPoint = routePoints.get(routePoints.size() - 1);
+                        truck.setLocation(lastPoint.getPointLocation());
+                        truck.setStatus(TruckStatusConstant.UNLOADING);
+                        truckWaitCounters.put(truckId, 3);
+                        truckMapper.updateByPrimaryKey(truck);
+                        
+                        broadcastTruckEvent(truck, "UNLOADING_START", null);
+                        log.info("车辆 {} 到达终点，开始卸货", truckId);
+                    } else {
+                        String interpolatedLocation = interpolatePosition(routePoints, progress);
+                        truck.setLocation(interpolatedLocation);
+                        
+                        int currentIndex = (int) (progress * routePoints.size());
+                        truck.setCurrentPointSequence(currentIndex);
+                        
+                        truckMapper.updateByPrimaryKey(truck);
+                        
+                        if (currentTask != null && currentTask.getGoodsId() != null) {
+                            checkAndRecordGoodsLoss(currentTask.getGoodsId(), task, truck);
+                        }
+                        
+                        broadcastTruckEvent(truck, "POSITION_UPDATE", null);
+                    }
+                }
+            } else if (TruckStatusConstant.IDLE.equals(status)) {
+                log.debug("车辆 {} 空闲中，等待分配任务", truckId);
+            } else if (TruckStatusConstant.PICKUP.equals(status)) {
+                // 处理前往取货点的车辆
+                Task task = taskMapper.selectByTruckId(truck.getId());
+                if (task == null) {
+                    truck.setStatus(TruckStatusConstant.IDLE);
+                    truckMapper.updateByPrimaryKey(truck);
+                    log.warn("车辆 {} 状态为取货中但无任务，重置为空闲", truckId);
                     continue;
                 }
 
-
-                // 按序号排序路径点
-                routePoints.sort(Comparator.comparingInt(TaskRoutePoint::getSequence));
-                Integer currentSequence = truck.getCurrentPointSequence();
-                if (currentSequence == null) currentSequence = 1;
-
-                // 改进移动逻辑：基于实际距离计算步长，保证速度均匀
-                // 时间间隔：0.5秒 (fixedRate=500)
-                // 基础移动距离：150米/0.5秒 (即 300米/秒 = 1080km/h)
-                // 根据仿真速度倍数动态调整
-                double targetDistance = 150.0 * simulationSpeed; 
-                
-                // 查找累积距离达到目标距离的点
-                int targetSequence = currentSequence;
-                double accumulatedDistance = 0;
-                
-                // 从当前点开始向后遍历
-                for (int i = currentSequence; i < routePoints.size(); i++) {
-                    TaskRoutePoint p1 = routePoints.get(i - 1);
-                    TaskRoutePoint p2 = routePoints.get(i);
-                    
-                    String loc1 = p1.getPointLocation();
-                    String loc2 = p2.getPointLocation();
-                    
-                    double dist = DistanceUtils.calculateDistance(
-                        DistanceUtils.parseLatitude(loc1), DistanceUtils.parseLongitude(loc1),
-                        DistanceUtils.parseLatitude(loc2), DistanceUtils.parseLongitude(loc2)
-                    ) * 1000; // 转换为米
-                    
-                    accumulatedDistance += dist;
-                    targetSequence = i + 1; // 更新目标序号
-                    
-                    if (accumulatedDistance >= targetDistance) {
-                        break;
+                List<TaskRoutePoint> routePoints = truckRouteCache.get(truckId);
+                if (routePoints == null) {
+                    routePoints = taskRoutePointMapper.selectByTaskId(task.getId()).stream()
+                            .filter(p -> p.getSequence() < 0)
+                            .sorted(Comparator.comparingInt(TaskRoutePoint::getSequence))
+                            .collect(Collectors.toList());
+                    if (routePoints.isEmpty()) {
+                        log.warn("车辆 {} 无取货路径点，直接开始装货", truckId);
+                        truck.setStatus(TruckStatusConstant.LOADING);
+                        truckWaitCounters.put(truckId, 3);
+                        truckMapper.updateByPrimaryKey(truck);
+                        continue;
                     }
+                    truckRouteCache.put(truckId, routePoints);
+                    truckMovementStartTime.put(truckId, System.currentTimeMillis());
+                    truckTotalDistance.put(truckId, calculateTotalRouteDistance(routePoints));
                 }
+
+                Long startTime = truckMovementStartTime.get(truckId);
+                Double totalDist = truckTotalDistance.get(truckId);
                 
-                // 如果已经到达终点或者剩余距离不足，直接移动到终点
-                if (targetSequence >= routePoints.size()) {
-                    targetSequence = routePoints.size();
-                }
-
-                if (currentSequence <= routePoints.size()) {
-                    TaskRoutePoint currentPoint = routePoints.get(targetSequence - 1);
-                    String location=currentPoint.getPointLocation();
+                if (startTime != null && totalDist != null && totalDist > 0) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    double speedKmh = 600.0 * simulationSpeed;
+                    double speedMs = speedKmh * 1000 / 3600;
+                    double traveledDistance = speedMs * (elapsed / 1000.0);
                     
-                    log.info("车辆 {} 移动到: {} (seq: {} -> {}, dist: {}m)", truckId, location, currentSequence, targetSequence, (int)accumulatedDistance);
+                    double progress = Math.min(traveledDistance / (totalDist * 1000), 1.0);
                     
-                    truck.setLocation(location);  // 更新车辆位置
-
-                    // 恢复单条推送，但前端需要智能处理
-                    try {
-                        Map<String, Object> message = new HashMap<>();
-                        message.put("truckId", truck.getId());
-                        message.put("location", location); 
-                        message.put("status", status); // 显式推送状态
-                        message.put("plateNumber", truck.getType()); // 暂时用车类型当车牌显示
+                    if (progress >= 1.0) {
+                        // 到达取货点，开始装货
+                        TaskRoutePoint lastPoint = routePoints.get(routePoints.size() - 1);
+                        truck.setLocation(lastPoint.getPointLocation());
+                        truck.setStatus(TruckStatusConstant.LOADING);
+                        truckWaitCounters.put(truckId, 3);
                         
-                        message.put("timestamp", new Date());
-                        // 修正：VehicleSimulationSocket.broadcast 接受字符串
-                        VehicleSimulationSocket.broadcast(new ObjectMapper().writeValueAsString(message));
-                    } catch (Exception e) {
-                        log.error("推送位置更新失败", e);
-                    }
-
-                    // 更新当前路径点序号
-                    if (targetSequence >= routePoints.size()) {
-                        // 到达终点 -> 进入卸货状态
-                        truck.setStatus(TruckStatusConstant.UNLOADING);
-                        truckWaitCounters.put(truckId, 3); // 卸货15秒
+                        // 清除取货路径缓存，准备运输路径
+                        truckRouteCache.remove(truckId);
+                        truckMovementStartTime.remove(truckId);
+                        truckTotalDistance.remove(truckId);
+                        
                         truckMapper.updateByPrimaryKey(truck);
-                        log.info("车辆 {} 到达终点，开始卸货", truckId);
+                        
+                        broadcastTruckEvent(truck, "ARRIVED_PICKUP", null);
+                        log.info("车辆 {} 到达取货点，开始装货", truckId);
                     } else {
-                        truck.setCurrentPointSequence(targetSequence); // 更新为新的序号
+                        String interpolatedLocation = interpolatePosition(routePoints, progress);
+                        truck.setLocation(interpolatedLocation);
+                        
+                        // 计算当前路径点索引并保存（取货路径使用负数索引）
+                        int currentIndex = (int) (progress * routePoints.size());
+                        truck.setCurrentPointSequence(-currentIndex);
+                        
                         truckMapper.updateByPrimaryKey(truck);
+                        
+                        broadcastTruckEvent(truck, "POSITION_UPDATE", null);
                     }
-                } else {
-                    // 序号异常，重置任务
-                    task.setStatus(TaskStatusConstant.TO_BE_ASSIGNED);
-                    task.setTruckId(null);
-                    taskMapper.updateTaskTruckId(task);
-                    taskMapper.updateStatus(task);
-                    truck.setStatus(TruckStatusConstant.IDLE);
-                    truck.setCurrentPointSequence(null);
-                    truckMapper.updateByPrimaryKey(truck);
-                    log.error("车辆 {} 路径序号异常，重置", truckId);
                 }
-            } else if (TruckStatusConstant.IDLE.equals(status)) {
-                 log.info("车辆 {} 空闲中，等待分配任务", truckId);
             }
-
-
         }
-        log.info("simulateStep结束: {}, 耗时: {}ms",
-                System.currentTimeMillis(),
-                System.currentTimeMillis() - startTime);
-
-
-        // 推送更新后的车辆信息到前端
-        broadcastTruckStatus(trucks);
-        log.info("已推送车辆状态更新");
+    }
+    
+    private double calculateTotalRouteDistance(List<TaskRoutePoint> routePoints) {
+        double totalDistance = 0;
+        for (int i = 1; i < routePoints.size(); i++) {
+            TaskRoutePoint p1 = routePoints.get(i - 1);
+            TaskRoutePoint p2 = routePoints.get(i);
+            
+            double dist = DistanceUtils.calculateDistance(
+                DistanceUtils.parseLatitude(p1.getPointLocation()), 
+                DistanceUtils.parseLongitude(p1.getPointLocation()),
+                DistanceUtils.parseLatitude(p2.getPointLocation()), 
+                DistanceUtils.parseLongitude(p2.getPointLocation())
+            );
+            totalDistance += dist;
+        }
+        return totalDistance;
+    }
+    
+    private String interpolatePosition(List<TaskRoutePoint> routePoints, double progress) {
+        if (routePoints.isEmpty()) return "116.397428,39.90923";
+        if (progress <= 0) return routePoints.get(0).getPointLocation();
+        if (progress >= 1) return routePoints.get(routePoints.size() - 1).getPointLocation();
+        
+        double totalDistance = calculateTotalRouteDistance(routePoints);
+        double targetDistance = totalDistance * progress;
+        
+        double accumulatedDistance = 0;
+        for (int i = 1; i < routePoints.size(); i++) {
+            TaskRoutePoint p1 = routePoints.get(i - 1);
+            TaskRoutePoint p2 = routePoints.get(i);
+            
+            double segmentDistance = DistanceUtils.calculateDistance(
+                DistanceUtils.parseLatitude(p1.getPointLocation()), 
+                DistanceUtils.parseLongitude(p1.getPointLocation()),
+                DistanceUtils.parseLatitude(p2.getPointLocation()), 
+                DistanceUtils.parseLongitude(p2.getPointLocation())
+            );
+            
+            if (accumulatedDistance + segmentDistance >= targetDistance) {
+                double segmentProgress = (targetDistance - accumulatedDistance) / segmentDistance;
+                
+                double lat1 = DistanceUtils.parseLatitude(p1.getPointLocation());
+                double lon1 = DistanceUtils.parseLongitude(p1.getPointLocation());
+                double lat2 = DistanceUtils.parseLatitude(p2.getPointLocation());
+                double lon2 = DistanceUtils.parseLongitude(p2.getPointLocation());
+                
+                double interpLat = lat1 + (lat2 - lat1) * segmentProgress;
+                double interpLon = lon1 + (lon2 - lon1) * segmentProgress;
+                
+                return String.format("%.6f,%.6f", interpLon, interpLat);
+            }
+            
+            accumulatedDistance += segmentDistance;
+        }
+        
+        return routePoints.get(routePoints.size() - 1).getPointLocation();
+    }
+    
+    private void broadcastTruckEvent(Truck truck, String eventType, List<TaskRoutePoint> routePoints) {
+        try {
+            Map<String, Object> message = new HashMap<>();
+            message.put("eventType", eventType);
+            message.put("truckId", truck.getId());
+            message.put("location", truck.getLocation());
+            message.put("status", truck.getStatus().toString());
+            message.put("taskId", truck.getTaskId());
+            message.put("timestamp", System.currentTimeMillis());
+            message.put("simulationSpeed", simulationSpeed);
+            
+            if (routePoints != null) {
+                message.put("routePoints", routePoints);
+                message.put("totalDistance", truckTotalDistance.get(truck.getId()));
+                message.put("startTime", truckMovementStartTime.get(truck.getId()));
+            }
+            
+            VehicleSimulationSocket.broadcast(new ObjectMapper().writeValueAsString(message));
+        } catch (Exception e) {
+            log.error("推送车辆事件失败", e);
+        }
     }
 
     //基于起始点实现路径选择
@@ -761,6 +1263,157 @@ public class SimulationService {
         
         log.info("已随机生成 {} 辆车", count);
         return generatedTrucks;
+    }
+
+    @Autowired
+    private com.muite.zongshe1.mapper.GoodsMapper goodsMapper;
+
+    private void checkAndRecordGoodsLoss(Integer goodsId, Task task, Truck truck) {
+        try {
+            long currentTime = System.currentTimeMillis();
+            Long lastCheck = lastLossCheckTime.get(goodsId);
+            
+            if (lastCheck != null && currentTime - lastCheck < 10000) {
+                return;
+            }
+            
+            lastLossCheckTime.put(goodsId, currentTime);
+            
+            double lossProbability = 0.15;
+            if (random.nextDouble() < lossProbability) {
+                Goods goods = goodsMapper.selectByPrimaryKey(goodsId);
+                if (goods == null || goods.getWeight() == null) {
+                    return;
+                }
+                
+                String[] lossTypes = {"破损", "丢失", "变质", "受潮", "挤压"};
+                String lossType = lossTypes[random.nextInt(lossTypes.length)];
+                
+                double lossPercentage = 1.0 + random.nextDouble() * 9.0;
+                
+                BigDecimal originalWeight = goods.getWeight();
+                BigDecimal lossWeight = originalWeight.multiply(BigDecimal.valueOf(lossPercentage / 100.0));
+                
+                BigDecimal originalValue = goods.getValue();
+                BigDecimal lossValue = originalValue != null 
+                    ? originalValue.multiply(BigDecimal.valueOf(lossPercentage / 100.0)) 
+                    : lossWeight.multiply(BigDecimal.valueOf(100));
+                
+                goodsService.recordLoss(goodsId, lossType, lossWeight, lossValue, truck.getId());
+                
+                log.info("货物 {} 发生{}损耗: {}% (重量: {}, 价值: {})", 
+                    goodsId, lossType, String.format("%.2f", lossPercentage), 
+                    lossWeight, lossValue);
+            }
+        } catch (Exception e) {
+            log.error("记录货物损耗失败: {}", e.getMessage());
+        }
+    }
+
+    public Map<String, Object> getTotalWaitingTime() {
+        Map<String, Object> result = new HashMap<>();
+        
+        List<Truck> allTrucks = truckMapper.selectAll();
+        long totalWaitingCycles = 0;
+        int totalTrucks = allTrucks.size();
+        
+        for (Truck truck : allTrucks) {
+            Integer waitCounter = truckWaitCounters.get(truck.getId());
+            if (waitCounter != null && waitCounter > 0) {
+                totalWaitingCycles += waitCounter;
+            }
+        }
+        
+        // 等待时间计算：乘以30，单位为分钟
+        double waitingMinutes = totalWaitingCycles * 30.0;
+        double waitingHours = waitingMinutes / 60.0;
+        
+        result.put("totalWaitingCycles", totalWaitingCycles);
+        result.put("totalWaitingMinutes", waitingMinutes);
+        result.put("totalWaitingHours", waitingHours);
+        result.put("averageWaitingMinutesPerTruck", totalTrucks > 0 ? waitingMinutes / totalTrucks : 0);
+        result.put("totalTrucks", totalTrucks);
+        
+        log.info("计算等待时间: 总周期={}, 总分钟={}, 总小时={}, 平均每车={}", 
+            totalWaitingCycles, waitingMinutes, waitingHours, 
+            totalTrucks > 0 ? waitingMinutes / totalTrucks : 0);
+        
+        return result;
+    }
+
+    /**
+     * 定时优化任务分配
+     * 每5分钟执行一次混合优化算法，对未分配任务进行重新优化
+     */
+    @Scheduled(fixedRate = 300000) // 5分钟 = 300000毫秒
+    public void scheduledOptimization() {
+        if (!isSimulationRunning) {
+            return;
+        }
+
+        // 查询待分配的任务
+        List<Task> unassignedTasks = taskMapper.findByTruckIdIsNull();
+        if (unassignedTasks.isEmpty()) {
+            log.debug("没有待分配任务，跳过优化");
+            return;
+        }
+
+        // 查询所有空闲车辆
+        List<Truck> idleTrucks = truckMapper.selectByStatus(TruckStatusConstant.IDLE);
+        if (idleTrucks.isEmpty()) {
+            log.debug("没有空闲车辆，跳过优化");
+            return;
+        }
+
+        log.info("=== 开始定时优化任务分配 ===");
+        log.info("待分配任务数: {}, 空闲车辆数: {}", unassignedTasks.size(), idleTrucks.size());
+
+        try {
+            // 使用混合优化算法（遗传算法 + 模拟退火）
+            Map<Truck, List<Task>> optimizedResult = optimizationService.hybridOptimization(idleTrucks, unassignedTasks);
+
+            // 应用优化结果
+            applyOptimizationResult(optimizedResult);
+
+            log.info("=== 定时优化完成 ===");
+        } catch (Exception e) {
+            log.error("定时优化失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 应用优化算法的分配结果
+     * 将优化后的任务分配方案应用到实际调度中
+     */
+    private void applyOptimizationResult(Map<Truck, List<Task>> optimizedResult) {
+        // 获取当前待分配队列中的任务ID
+        Set<Integer> pendingTaskIds = new HashSet<>();
+        for (Task t : pendingTasks) {
+            if (t.getId() != null) {
+                pendingTaskIds.add(t.getId());
+            }
+        }
+
+        for (Map.Entry<Truck, List<Task>> entry : optimizedResult.entrySet()) {
+            Truck truck = entry.getKey();
+            List<Task> tasks = entry.getValue();
+
+            if (!tasks.isEmpty()) {
+                // 选择第一个任务进行分配（优化算法可能分配多个任务给一辆车）
+                Task task = tasks.get(0);
+                
+                // 检查任务是否仍未分配且不在待分配队列中
+                if (task.getId() != null && !pendingTaskIds.contains(task.getId())) {
+                    Task currentTask = taskMapper.selectByPrimaryKey(task.getId());
+                    if (currentTask != null && currentTask.getTruckId() == null) {
+                        log.info("优化结果: 车辆{} 分配任务{}", truck.getId(), task.getId());
+                        
+                        // 将任务加入待分配队列，由贪心算法的定时任务处理实际分配
+                        pendingTasks.offer(task);
+                    }
+                }
+            }
+        }
     }
 
 }

@@ -26,4 +26,11 @@
         DELETE FROM task_route_point
         WHERE task_id = #{taskId}
     </delete>
+
+    <!-- 删除已完成任务的路径点 -->
+    <delete id="deleteCompletedTaskRoutePoints">
+        DELETE trp FROM task_route_point trp
+        INNER JOIN task t ON trp.task_id = t.id
+        WHERE t.status = '已完成'
+    </delete>
 </mapper>

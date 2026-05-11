@@ -1,6 +1,7 @@
 package com.muite.zongshe1.entity;
 
 import java.math.BigDecimal;
+import java.util.Stack;
 
 /**
  * 
@@ -45,7 +46,17 @@ public class Truck {
     private transient double distanceToTask; // 临时距离（不存入数据库）
 
 
-    private transient Integer taskId; // 临时任务ID（不存入数据库）
+    private transient Integer taskId; // 当前正在处理的任务ID（不存入数据库）
+    
+    // ========== 一车多货相关字段 ==========
+    // 任务栈：实现先装后卸（LIFO）
+    private transient Stack<Integer> taskStack = new Stack<>();
+    
+    // 当前已装载的总重量
+    private transient BigDecimal currentLoadWeight = BigDecimal.ZERO;
+    
+    // 当前已装载的总体积
+    private transient BigDecimal currentLoadVolume = BigDecimal.ZERO;
 
     public Integer getTaskId() {
         return taskId;
@@ -248,5 +259,96 @@ public class Truck {
         this.weight = weight;
     }
 
+    // ========== 一车多货相关方法 ==========
+    
+    public Stack<Integer> getTaskStack() {
+        return taskStack;
+    }
+
+    public void setTaskStack(Stack<Integer> taskStack) {
+        this.taskStack = taskStack;
+    }
+
+    public BigDecimal getCurrentLoadWeight() {
+        return currentLoadWeight;
+    }
+
+    public void setCurrentLoadWeight(BigDecimal currentLoadWeight) {
+        this.currentLoadWeight = currentLoadWeight;
+    }
+
+    public BigDecimal getCurrentLoadVolume() {
+        return currentLoadVolume;
+    }
+
+    public void setCurrentLoadVolume(BigDecimal currentLoadVolume) {
+        this.currentLoadVolume = currentLoadVolume;
+    }
+
+    /**
+     * 检查是否可以装载指定重量和体积的货物
+     */
+    public boolean canLoad(BigDecimal weight, BigDecimal volume) {
+        BigDecimal newWeight = currentLoadWeight.add(weight);
+        BigDecimal newVolume = currentLoadVolume.add(volume);
+        return newWeight.compareTo(maxWeight) <= 0 && newVolume.compareTo(maxVol) <= 0;
+    }
+
+    /**
+     * 装载货物
+     */
+    public void load(BigDecimal weight, BigDecimal volume) {
+        currentLoadWeight = currentLoadWeight.add(weight);
+        currentLoadVolume = currentLoadVolume.add(volume);
+    }
+
+    /**
+     * 卸载货物
+     */
+    public void unload(BigDecimal weight, BigDecimal volume) {
+        currentLoadWeight = currentLoadWeight.subtract(weight);
+        currentLoadVolume = currentLoadVolume.subtract(volume);
+        if (currentLoadWeight.compareTo(BigDecimal.ZERO) < 0) {
+            currentLoadWeight = BigDecimal.ZERO;
+        }
+        if (currentLoadVolume.compareTo(BigDecimal.ZERO) < 0) {
+            currentLoadVolume = BigDecimal.ZERO;
+        }
+    }
+
+    /**
+     * 获取剩余载重
+     */
+    public BigDecimal getRemainingWeight() {
+        return maxWeight.subtract(currentLoadWeight);
+    }
+
+    /**
+     * 获取剩余容积
+     */
+    public BigDecimal getRemainingVolume() {
+        return maxVol.subtract(currentLoadVolume);
+    }
+
+    /**
+     * 是否有更多任务需要处理
+     */
+    public boolean hasMoreTasks() {
+        return !taskStack.isEmpty();
+    }
+
+    /**
+     * 获取下一个要处理的任务（不出栈）
+     */
+    public Integer peekNextTask() {
+        return taskStack.isEmpty() ? null : taskStack.peek();
+    }
+
+    /**
+     * 完成当前任务（出栈）
+     */
+    public Integer completeCurrentTask() {
+        return taskStack.isEmpty() ? null : taskStack.pop();
+    }
 
 }

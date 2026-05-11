@@ -15,7 +15,8 @@ public class Task {
     private BigDecimal weight;
     private BigDecimal volume;
     
-    // 关联客户信息
+    private Integer goodsId;
+    
     private Integer senderId;
     private Integer receiverId;
     private String senderName; // 冗余字段，方便查询
@@ -194,6 +195,14 @@ public class Task {
      */
     public void setVolume(BigDecimal volume) {
         this.volume = volume;
+    }
+
+    public Integer getGoodsId() {
+        return goodsId;
+    }
+
+    public void setGoodsId(Integer goodsId) {
+        this.goodsId = goodsId;
     }
 
     public String toString() {
